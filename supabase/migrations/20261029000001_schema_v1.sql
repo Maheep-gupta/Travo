@@ -1,4 +1,4 @@
--- Mission Control schema v1.
+-- Tavro schema v1.
 --
 -- Security model (see docs/SECURITY.md):
 --   * Two kinds of authenticated principals:
