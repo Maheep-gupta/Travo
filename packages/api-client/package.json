@@ -1,0 +1,22 @@
+{
+  "name": "@mc/api-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./demo": "./src/demo-entry.ts",
+    "./supabase": "./src/supabase-entry.ts",
+    "./connection": "./src/connection.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@mc/contracts": "*",
+    "@mc/demo": "*",
+    "@mc/domain": "*",
+    "@supabase/supabase-js": "^2.118.0",
+    "zod": "^4.6.7"
+  }
+}

@@ -1,0 +1,30 @@
+node_modules/
+dist/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+# Connector credentials and state (host password lives here)
+apps/connector/.data/
+# Supabase local artefacts
+supabase/.branches/
+supabase/.temp/
+supabase/functions/.env
+# Playwright output
+apps/web/test-results/
+apps/web/playwright-report/
+# Keys, certificates and local databases
+*.pem
+*.key
+*.p12
+certs/
+supabase/signing_keys.json
+*.db
+*.sqlite
+*.sqlite3
+# Personal Claude Code settings
+.claude/settings.local.json
+# OS files
+.DS_Store
+Thumbs.db

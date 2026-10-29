@@ -1,0 +1,1 @@
+-- No seed data. Demo sessions come from the connector's mock provider and are flagged is_demo.

@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Tavro browser checks</title>
+  <style>body{margin:0;font:12px monospace;background:#222;color:#eee}iframe{border:0;display:block;background:#fff}</style>
+</head>
+<body>
+  <!-- The app runs inside this same-origin iframe at a phone-sized viewport. -->
+  <iframe id="app" width="390" height="900" title="app under test"></iframe>
+  <pre id="out">running</pre>
+  <script src="/__e2e/checks.js"></script>
+</body>
+</html>
