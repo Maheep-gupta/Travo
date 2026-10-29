@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import type { AuthUser } from "@mc/api-client/demo";
 import { useApi, useApiContext } from "../api-context.js";
 import { BrandMark } from "../icons.js";
@@ -10,6 +10,11 @@ export function SignInPage({ onSignedIn }: { onSignedIn: (u: AuthUser | null) =>
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
+  // A rejected sign-in can't say which field was wrong, so both point at the message.
+  const invalid = error
+    ? ({ "aria-invalid": true, "aria-describedby": "signin-error" } as const)
+    : {};
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -21,6 +26,7 @@ export function SignInPage({ onSignedIn }: { onSignedIn: (u: AuthUser | null) =>
       onSignedIn(await api.getUser());
     } catch (err) {
       setError((err as Error).message);
+      passwordRef.current?.focus();
     } finally {
       setBusy(false);
     }
@@ -37,11 +43,13 @@ export function SignInPage({ onSignedIn }: { onSignedIn: (u: AuthUser | null) =>
         <form className="card" onSubmit={submit}>
           <label className="field">
             <span>Email</span>
-            <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" required />
+            <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" required {...invalid} />
           </label>
           <label className="field">
             <span>Password</span>
             <input
+              ref={passwordRef}
+              {...invalid}
               className="input"
               type="password"
               value={password}
@@ -51,7 +59,7 @@ export function SignInPage({ onSignedIn }: { onSignedIn: (u: AuthUser | null) =>
             />
           </label>
           {error && (
-            <p className="notice error" role="alert" style={{ marginBottom: "var(--sp-4)" }}>
+            <p className="notice error" role="alert" id="signin-error" style={{ marginBottom: "var(--sp-4)" }}>
               {error}
             </p>
           )}

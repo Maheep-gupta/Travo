@@ -11,12 +11,12 @@ Users can trust Tavro to tell them what their AI coding sessions are doing and w
 
 ## Next task
 
-**M1: accessible form errors on Setup and Sign-in.** Acceptance criteria:
-- A field-level problem marks its input with `aria-invalid` and links the message with `aria-describedby`.
-- Server or connection errors stay in a form-level `role="alert"`.
-- Focus moves to the first invalid field when a submit is rejected.
-- No change to validation rules or to the privileged-key rejection.
-- Extract any parsing into pure functions with unit tests.
+**M9 and M3 release readiness: dependency and licence review, plus deep-link and refresh documentation.** Acceptance criteria:
+- A licence inventory of production dependencies, taken offline from `package-lock.json` and `node_modules`, is recorded in docs/QUALITY.md. Flag any copyleft or unknown licences.
+- `npm audit` is run only if the user approves the network call. Otherwise it's recorded as not run.
+- Document how to serve `apps/web/dist` with an SPA fallback so deep links like `/sessions/:id` and `/alerts` survive a refresh. Verify locally with `vite preview` on 127.0.0.1 using HTTP requests only; no browser is needed.
+
+After that, the candidates are the M2 per-device "show session names" option and the low-severity alert edge cases.
 
 ---
 
@@ -64,7 +64,7 @@ Users can trust Tavro to tell them what their AI coding sessions are doing and w
   - heading order;
   - copy that implied replies were supported, corrected.
 - ✅ Filters already lived in the URL. They're now validated (unknown and prototype-named values are ignored, and search is capped at 200 characters). Group and integration toggles are history steps, and the live region is always mounted. Verified by 5 unit tests.
-- ⬜ Setup and Sign-in field errors linked to their inputs with `aria-invalid` and `aria-describedby`.
+- ✅ Setup and Sign-in field errors are linked to their inputs (`aria-invalid` and `aria-describedby`), and focus moves to the first invalid field. Setup now shows every invalid field, not just the first. Verified by unit tests for the issue-to-field mapping, including the privileged-key rejection.
 
 ### M2: Tavro Alerts ✅ (foreground only)
 - ✅ `detectAlerts`, `mergeAlerts`, `parseStoredAlerts` and `alertNotificationText` in `@mc/domain`, plus the Alerts page, the unread badge in the navigation, the Settings card for system notifications, and storage synced across tabs. Verified by typecheck, lint, 83 unit tests and the build. The browser and the e2e checks weren't run (blocked).
