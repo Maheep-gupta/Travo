@@ -1,11 +1,13 @@
 import { Suspense, useEffect, useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, NavLink, Navigate, Route, Routes, useLocation } from "react-router";
 import type { AuthUser } from "@mc/api-client/demo";
-import { checkSchemaCompat } from "@mc/domain";
+import { checkSchemaCompat, unreadCount } from "@mc/domain";
+import { AlertsProvider, useAlerts } from "./alerts-context.js";
+import "./alerts.css";
 import { useApi, useApiContext, useLiveUpdates } from "./api-context.js";
 import { ErrorState, Notice, Spinner } from "./components.js";
-import { BrandMark, IconHost, IconSessions, IconSettings } from "./icons.js";
+import { BrandMark, IconBell, IconHost, IconSessions, IconSettings } from "./icons.js";
 import { PageErrorBoundary, retryableLazy } from "./page-loading.js";
 import { DashboardPage } from "./pages/DashboardPage.js";
 
@@ -13,6 +15,7 @@ import { DashboardPage } from "./pages/DashboardPage.js";
 // retryableLazy + PageErrorBoundary make a failed chunk download recoverable.
 const SessionPage = retryableLazy(() => import("./pages/SessionPage.js").then((m) => m.SessionPage));
 const HostsPage = retryableLazy(() => import("./pages/HostsPage.js").then((m) => m.HostsPage));
+const AlertsPage = retryableLazy(() => import("./pages/AlertsPage.js").then((m) => m.AlertsPage));
 const SettingsPage = retryableLazy(() => import("./pages/SettingsPage.js").then((m) => m.SettingsPage));
 const SetupPage = retryableLazy(() => import("./pages/SetupPage.js").then((m) => m.SetupPage));
 const SignInPage = retryableLazy(() => import("./pages/SignInPage.js").then((m) => m.SignInPage));
@@ -52,16 +55,22 @@ export function App() {
 function AuthGate() {
   const api = useApi();
   const [user, setUser] = useState<AuthUser | null | undefined>(undefined);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     let alive = true;
     void api.getUser().then((u) => alive && setUser(u));
-    const off = api.onAuthChange((u) => setUser(u));
+    const off = api.onAuthChange((u) => {
+      // Cached sessions, hosts and preferences belong to the user who signed
+      // out; the next user must never see them or be baselined against them.
+      if (!u) queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "schema" });
+      setUser(u);
+    });
     return () => {
       alive = false;
       off();
     };
-  }, [api]);
+  }, [api, queryClient]);
 
   const schema = useQuery({ queryKey: ["schema", api.kind], queryFn: () => api.getSchemaVersion(), staleTime: Infinity });
 
@@ -95,7 +104,11 @@ function AuthGate() {
       </PageErrorBoundary>
     );
   }
-  return <Shell />;
+  return (
+    <AlertsProvider userId={user.id}>
+      <Shell />
+    </AlertsProvider>
+  );
 }
 
 function Centered({ title, children }: { title: string; children: ReactNode }) {
@@ -124,6 +137,7 @@ function ResetBackend() {
 
 const NAV = [
   { to: "/", label: "Sessions", icon: <IconSessions />, match: (p: string) => p === "/" || p.startsWith("/sessions/") },
+  { to: "/alerts", label: "Alerts", icon: <IconBell />, match: (p: string) => p.startsWith("/alerts") },
   { to: "/hosts", label: "Hosts", icon: <IconHost />, match: (p: string) => p.startsWith("/hosts") },
   { to: "/settings", label: "Settings", icon: <IconSettings />, match: (p: string) => p.startsWith("/settings") },
 ];
@@ -132,6 +146,7 @@ function Shell() {
   const api = useApi();
   const { pathname } = useLocation();
   useLiveUpdates();
+  const unread = unreadCount(useAlerts());
 
   // Move focus to the page on route change so keyboard and screen-reader users start at the new content.
   useEffect(() => {
@@ -140,10 +155,22 @@ function Shell() {
 
   const navLink = (n: (typeof NAV)[number], withIcon: boolean) => {
     const active = n.match(pathname);
+    const badge = n.to === "/alerts" && unread > 0 ? (unread > 99 ? "99+" : String(unread)) : null;
     return (
-      <Link key={n.to} to={n.to} className={active ? "active" : undefined} aria-current={active ? "page" : undefined}>
+      <Link
+        key={n.to}
+        to={n.to}
+        className={active ? "active" : undefined}
+        aria-current={active ? "page" : undefined}
+        aria-label={badge ? `${n.label}, ${unread} unread` : undefined}
+      >
         {withIcon && n.icon}
         {n.label}
+        {badge && (
+          <span className="badge-count" aria-hidden="true">
+            {badge}
+          </span>
+        )}
       </Link>
     );
   };
@@ -183,6 +210,7 @@ function Shell() {
             <Routes>
               <Route path="/" element={<DashboardPage />} />
               <Route path="/sessions/:id" element={<SessionPage />} />
+              <Route path="/alerts" element={<AlertsPage />} />
               <Route path="/hosts" element={<HostsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />

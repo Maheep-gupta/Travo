@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router";
 import { DEFAULT_NOTIFICATION_PREFS, MAX_SCHEMA_VERSION } from "@mc/contracts/constants";
 import type { NotificationPrefs } from "@mc/contracts";
+import { forgetAlerts, useAlertStore } from "../alerts-context.js";
 import { useApi, useApiContext } from "../api-context.js";
 import { ErrorState, Notice, PageHeader, Spinner } from "../components.js";
 import { IconCheck } from "../icons.js";
+import { SystemNotificationsCard } from "../system-notifications-card.js";
 import { prefsEqual } from "../view-model.js";
 
 const LABELS: Record<keyof NotificationPrefs, { title: string; hint: string }> = {
@@ -19,6 +22,7 @@ const LABELS: Record<keyof NotificationPrefs, { title: string; hint: string }> =
 export function SettingsPage() {
   const api = useApi();
   const { choice, setChoice } = useApiContext();
+  const alertStore = useAlertStore();
   const queryClient = useQueryClient();
   const prefsKey = ["prefs", api.kind];
   const prefsQuery = useQuery({ queryKey: prefsKey, queryFn: () => api.getNotificationPrefs() });
@@ -90,7 +94,14 @@ export function SettingsPage() {
                 Sign out
               </button>
             )}
-            <button type="button" className="btn ghost" onClick={() => setChoice(null)}>
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={() => {
+                forgetAlerts(alertStore);
+                setChoice(null);
+              }}
+            >
               Change backend
             </button>
           </div>
@@ -98,12 +109,12 @@ export function SettingsPage() {
 
         <section className="card" aria-labelledby="h-notif">
           <div className="card-title">
-            <h2 id="h-notif">Notifications</h2>
+            <h2 id="h-notif">Alerts</h2>
           </div>
-          <Notice tone="warn">
-            <strong>Push delivery isn't enabled yet.</strong> Your choices are saved and will apply once push notifications are reviewed and turned on.
-            Until then, changes appear live while the app is open.
-          </Notice>
+          <p className="card-sub">
+            Choose which events create an alert. They appear in <Link to="/alerts">Alerts</Link> and, if you turn them on, as system notifications on
+            this device, but only while Tavro is open.
+          </p>
           {prefsQuery.isLoading ? (
             <Spinner />
           ) : prefsQuery.error ? (
@@ -156,6 +167,8 @@ export function SettingsPage() {
             </form>
           )}
         </section>
+
+        <SystemNotificationsCard />
       </div>
     </main>
   );

@@ -1,0 +1,41 @@
+/* Tavro Alerts: notification centre and unread badge. Uses tokens from styles.css. */
+
+.badge-count {
+  display: inline-grid; place-items: center;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: var(--r-pill);
+  background: var(--accent); color: var(--accent-ink);
+  font: 700 0.68rem/1 var(--font); font-variant-numeric: tabular-nums;
+}
+.topnav .badge-count { margin-left: 2px; }
+
+.alert-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.alert-item {
+  --c: var(--st-neutral);
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: var(--sp-3);
+  padding: 12px var(--sp-3) 12px var(--sp-4);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+}
+.alert-item .dot { width: 8px; height: 8px; margin-top: 7px; border-radius: 50%; background: var(--c); }
+.alert-item.st-disconnected .dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c); }
+.alert-item.unread { border-color: color-mix(in srgb, var(--c) 34%, var(--line)); box-shadow: inset 3px 0 0 var(--c), var(--shadow-1); }
+.alert-body { display: grid; gap: 4px; min-width: 0; }
+.alert-link { display: grid; gap: 2px; color: inherit; text-decoration: none; min-height: 44px; align-content: center; border-radius: var(--r-sm); }
+.alert-link:hover .alert-name { text-decoration: underline; text-underline-offset: 3px; }
+.alert-kind { font: 600 0.78rem/1.2 var(--font); color: var(--c); }
+.alert-name { font-weight: 600; overflow-wrap: anywhere; }
+.alert-item:not(.unread) .alert-name { font-weight: 500; color: var(--text-2); }
+.alert-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--muted); }
+.alert-meta time { font-family: var(--mono); font-size: 0.78rem; }
+.alert-actions { display: flex; align-items: center; gap: 2px; }
+
+.icon-btn {
+  display: inline-grid; place-items: center; width: 44px; height: 44px; flex: none;
+  border: 0; border-radius: var(--r-md); background: transparent; color: var(--muted); cursor: pointer;
+}
+.icon-btn:hover { background: var(--surface-2); color: var(--text); }
+.icon-btn svg { width: 18px; height: 18px; }
+
+@media (max-width: 480px) {
+  .alert-actions .btn { display: none; } /* Opening an alert marks it read; keep rows compact on phones. */
+}

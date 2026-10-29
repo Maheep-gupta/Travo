@@ -51,16 +51,19 @@ export function SessionPage() {
     enabled: canReadMessages,
   });
 
+  // Every state keeps a page-level h1 (visually hidden where the design has none).
   if (sessions.isLoading) {
     return (
       <main className="page">
-        <SessionListSkeleton count={3} />
+        <h1 className="sr-only">Session</h1>
+        <SessionListSkeleton count={3} label="Loading session…" />
       </main>
     );
   }
   if (sessions.error) {
     return (
       <main className="page">
+        <h1 className="sr-only">Session</h1>
         <ErrorState error={sessions.error} onRetry={sessions.refetch} />
       </main>
     );
@@ -68,6 +71,7 @@ export function SessionPage() {
   if (!session) {
     return (
       <main className="page">
+        <h1 className="sr-only">Session</h1>
         <EmptyState title="Session not found">
           <p>It may have ended and been removed, or it belongs to another account.</p>
           <Link to="/" className="btn">
@@ -213,7 +217,7 @@ export function SessionPage() {
               <h2 id="h-reply">Remote control</h2>
             </div>
             {canReply ? (
-              <p>Replies are supported for this session.</p>
+              <p>This integration reports reply support, but Tavro does not send replies in this release.</p>
             ) : (
               <div className="locked">
                 <div className="row">

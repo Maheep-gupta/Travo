@@ -4,14 +4,16 @@
 
 A mobile-first dashboard for monitoring Claude sessions running on your laptop.
 
-**Current state (2026-10-29): local-first MVP, demo data only.**
+**Current state (2026-10-30): local-first MVP, demo data only.**
 
 - The web dashboard and the connector work with **simulated** sessions.
+- **Tavro Alerts** puts every session that needs approval, is waiting for you, fails or finishes, plus every host that disconnects, into an in-app Alerts list. You can also opt in to system notifications on each device. Both work **only while Tavro is open**.
+- The app can be installed as a web app (manifest and icons), but installation hasn't been tested in a real browser yet.
 - The database layer (Supabase schema and security policies) is written but **not yet verified**, because Docker isn't responding on the development laptop.
 - The real Claude Code adapter stays **disabled** until the database isolation tests have passed.
 - Replies, remote approvals, push notifications and cloud connectivity are **out of scope** for this release.
 
-For details, see [docs/FEASIBILITY.md](docs/FEASIBILITY.md) and [docs/SECURITY.md](docs/SECURITY.md).
+For details, see [docs/FEASIBILITY.md](docs/FEASIBILITY.md) and [docs/SECURITY.md](docs/SECURITY.md). For progress and what comes next, see [docs/ROADMAP.md](docs/ROADMAP.md); known limitations are listed in [docs/QUALITY.md](docs/QUALITY.md).
 
 ## Layout
 

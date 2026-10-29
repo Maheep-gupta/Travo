@@ -60,7 +60,7 @@ export function HostsPage() {
       </PageHeader>
 
       {hosts.isLoading ? (
-        <SessionListSkeleton count={2} />
+        <SessionListSkeleton count={2} label="Loading hosts…" />
       ) : hosts.error ? (
         <ErrorState error={hosts.error} onRetry={() => void hosts.refetch()} />
       ) : hosts.data?.length ? (
@@ -170,7 +170,8 @@ export function HostsPage() {
                 </button>
                 <span className="muted">Expires {new Date(ticket.expires_at).toLocaleTimeString()} · shown once</span>
               </div>
-              <span role="status" aria-live="polite" className={copy === "failed" ? "field-error" : "sr-only"}>
+              {/* Announced by the ticket's own status region; a nested live region would double-announce. */}
+              <span className={copy === "failed" ? "field-error" : "sr-only"}>
                 {copy === "copied" ? "Command copied to clipboard." : copy === "failed" ? "Couldn't copy automatically. Select the command above and copy it manually." : ""}
               </span>
             </div>

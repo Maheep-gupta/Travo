@@ -206,7 +206,7 @@ async function pageLoadFailureChecks() {
   $$(".tabbar a").find((a) => a.textContent.includes("Hosts")).click();
   const alert = await until(() => $(".page-error[role=alert]"));
   log(!!alert && /Couldn't load this page/.test(alert.textContent), "failed Hosts chunk shows 'Couldn't load this page' (role=alert)");
-  log(!!$(".topbar .brand") && $$(".tabbar a").length === 3, "header and navigation stay visible during the page error");
+  log(!!$(".topbar .brand") && $$(".tabbar a").length === 4, "header and navigation stay visible during the page error");
   const retry = button("Retry");
   log(!!retry && retry.tagName === "BUTTON" && retry.type === "button", "Retry is a real, keyboard-focusable button");
 

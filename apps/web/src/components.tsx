@@ -96,11 +96,13 @@ export function Spinner({ label = "Loading…" }: { label?: string }) {
   );
 }
 
-export function SessionListSkeleton({ count = 4 }: { count?: number }) {
+export function SessionListSkeleton({ count = 4, label = "Loading sessions…" }: { count?: number; label?: string }) {
+  // The label is real text (not aria-label) so the status region has content to announce.
   return (
-    <div className="skeleton" role="status" aria-label="Loading sessions">
+    <div className="skeleton" role="status">
+      <span className="sr-only">{label}</span>
       {Array.from({ length: count }, (_, i) => (
-        <div key={i} className="skel" />
+        <div key={i} className="skel" aria-hidden="true" />
       ))}
     </div>
   );

@@ -103,6 +103,17 @@ export const IconCopy = (p: P) => (
     <path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8" />
   </Icon>
 );
+export const IconBell = (p: P) => (
+  <Icon {...p}>
+    <path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z" />
+    <path d="M10 20.5a2.2 2.2 0 0 0 4 0" />
+  </Icon>
+);
+export const IconClose = (p: P) => (
+  <Icon {...p}>
+    <path d="m6.5 6.5 11 11M17.5 6.5l-11 11" />
+  </Icon>
+);
 
 /** Brand mark: a signal ring around a core. */
 export function BrandMark({ className = "brand-mark" }: { className?: string }) {
