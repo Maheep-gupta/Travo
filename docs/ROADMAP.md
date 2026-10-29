@@ -11,12 +11,15 @@ Users can trust Tavro to tell them what their AI coding sessions are doing and w
 
 ## Next task
 
-**M4 groundwork: a provider-error state in the connector.** Today a failed `provider.poll()` (CLI missing, timed out, bad output) is reported as "offline", the same as losing the backend. Acceptance criteria:
-- The connector tells provider failures apart from transport failures, in both its status and its logs.
-- A provider failure never marks sessions ended. Already true via the parser's empty-output rule; add a regression test at the connector level.
-- Heartbeats continue while the provider is failing, so the host stays "online" and its sessions aren't shown as disconnected for the wrong reason.
-- Backoff for provider failures is tested with the mock provider made to fail.
-- No change to the schema, the transport or the `REAL_ADAPTER_ENABLED` gate.
+**M4 trust gap: show "session source not responding" in the UI.** Since 2026-10-30 the connector keeps heartbeating while its provider fails, so the host shows as online and its sessions keep their **last known** status, which may be stale. The UI must say so. Acceptance criteria:
+- **Schema v2 migration:** add nullable `hosts.provider_error_since timestamptz`. The host can only set or clear it on its own row, extending the existing heartbeat grant and RLS policy, and it's never writable by the owner.
+- **Bump `MAX_SCHEMA_VERSION`.** Clients must still accept v1 and treat the missing field as null.
+- **Contracts and transport:** `HeartbeatInput` carries `provider_ok`; the connector sends it.
+- **Domain:** a session behind a host with a provider error displays as "unknown", with the reason "Session source on this host isn't responding". It is never shown as its stored status, and `detectAlerts` treats that host like an offline one for session alerts.
+- **Demo:** the demo backend simulates a provider outage so the state can be seen.
+- **Tests:** unit and component tests. Add RLS test cases to `supabase/tests`, written but **not run** (Docker), and say so.
+
+**Done 2026-10-30:** the connector now tells provider failures apart from backend failures. That covers its state, logs and recovery message; no forced heartbeat; nothing marked ended. Verified by 3 connector tests.
 
 **Waiting on the user** (no work can proceed without them):
 - Choose a project licence.
@@ -106,7 +109,8 @@ Users can trust Tavro to tell them what their AI coding sessions are doing and w
 
 ### M4: Local read-only monitoring ⛔ (groundwork 🟡)
 - ✅ `ClaudeCodeProvider` and `parseClaudeAgentsJson` are built and disabled. They have 34 tests on synthetic output; see docs/INTEGRATIONS.md for behaviour and the list of things to verify live.
-- ⬜ Connector provider-error state (see Next task).
+- ✅ The connector has a provider-error state, separate from offline, with tests.
+- ⬜ Show the provider error in the UI, with schema v2 (see Next task).
 
 Enabling it is blocked by M5. The Claude Code adapter (`claude agents --json`) is designed in docs/INTEGRATIONS.md and stays disabled.
 

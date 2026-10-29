@@ -14,7 +14,9 @@ class ScriptedProvider implements Provider {
   readonly id = "mock" as const;
   readonly isDemo = true;
   current: ProviderSession[] = [];
+  failWith: Error | null = null;
   async poll() {
+    if (this.failWith) throw this.failWith;
     return this.current.map((s) => ({ ...s }));
   }
   async messages(externalId: string): Promise<ProviderMessage[]> {
@@ -104,6 +106,49 @@ describe("Connector", () => {
     advance(1000);
     await connector.runOnce();
     expect(transport.events.filter((e) => e.status === "approval_required")).toHaveLength(1);
+  });
+
+  it("reports a failing provider separately from the backend, without ending sessions", async () => {
+    const { provider, transport, connector, logs, advance } = setup();
+    provider.current = [session("a", "running")];
+    await connector.runOnce();
+
+    provider.failWith = new Error("claude agents --json timed out.");
+    for (let i = 0; i < 4; i++) {
+      advance(15_000);
+      await connector.runOnce();
+    }
+    expect(connector.connectionState).toBe("provider_error");
+    expect(logs.filter((l) => l.startsWith("provider error: mock: claude agents --json timed out."))).toHaveLength(1);
+    expect(logs.some((l) => l.startsWith("offline"))).toBe(false);
+    // Heartbeats keep the host online on their normal schedule (t=0, 30s, 60s).
+    expect(transport.heartbeats).toHaveLength(3);
+    // A failed read is not "no sessions": nothing is ended.
+    expect(transport.events.filter((e) => e.type === "session_ended")).toHaveLength(0);
+    expect(transport.sessions.get("mock:a")?.status).toBe("running");
+
+    provider.failWith = null;
+    provider.current = [session("a", "waiting_for_input")];
+    advance(5000);
+    expect(await connector.runOnce()).toBe(1000);
+    expect(connector.connectionState).toBe("online");
+    expect(logs.at(-1)).toMatch(/^provider recovered: mock after \d+s$/);
+    expect(transport.events.map((e) => `${e.type}:${e.status}`)).toEqual(["session_discovered:running", "status_changed:waiting_for_input"]);
+  });
+
+  it("backs off while the provider keeps failing", async () => {
+    const { provider, connector } = setup();
+    provider.failWith = new Error("not found");
+    const delays: number[] = [];
+    for (let i = 0; i < 8; i++) delays.push(await connector.runOnce());
+    expect(delays.every((d) => d >= 1000 && d <= MAX_BACKOFF_MS)).toBe(true);
+  });
+
+  it("still reports backend loss as offline even when the provider is fine", async () => {
+    const { transport, connector } = setup();
+    transport.available = false;
+    await connector.runOnce();
+    expect(connector.connectionState).toBe("offline");
   });
 
   it("marks disappeared sessions as ended, not completed", async () => {

@@ -2,7 +2,21 @@ import type { SessionStatus, SessionUpsert } from "@mc/contracts";
 import { HEARTBEAT_INTERVAL_MS, effectiveCapabilities, diffObservations, transcriptContentDecision } from "@mc/domain";
 import type { EventInput, KnownSession, MessageInput, Provider, Transport } from "./types.js";
 
-export type ConnectionState = "starting" | "online" | "offline";
+/**
+ * "provider_error": the backend is reachable but the session source failed
+ * (e.g. the CLI is missing, timed out or printed something unparseable).
+ * Kept apart from "offline" so a local tool problem is never reported as the
+ * backend being down, and so heartbeats keep the host online meanwhile.
+ */
+export type ConnectionState = "starting" | "online" | "offline" | "provider_error";
+
+/** A failure of the provider (session source), as opposed to the transport. */
+export class ProviderError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProviderError";
+  }
+}
 
 export interface ConnectorOptions {
   provider: Provider;
@@ -37,6 +51,7 @@ export class Connector {
   private failures = 0;
   private lastHeartbeat = 0;
   private offlineSince: Date | null = null;
+  private providerFailingSince: Date | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
   private readonly pollMs: number;
@@ -58,16 +73,29 @@ export class Connector {
     const now = this.now();
     try {
       await this.sync(now);
-      if (this.state !== "online") {
-        const after = this.offlineSince ? ` after ${Math.round((now.getTime() - this.offlineSince.getTime()) / 1000)}s offline` : "";
+      const secondsSince = (since: Date) => Math.round((now.getTime() - since.getTime()) / 1000);
+      if (this.state === "provider_error" && this.providerFailingSince) {
+        this.log(`provider recovered: ${this.opts.provider.id} after ${secondsSince(this.providerFailingSince)}s`);
+      } else if (this.state !== "online") {
+        const after = this.offlineSince ? ` after ${secondsSince(this.offlineSince)}s offline` : "";
         this.log(`online: connected to ${this.opts.transport.backendUrl}${after}`);
       }
       this.state = "online";
       this.failures = 0;
       this.offlineSince = null;
+      this.providerFailingSince = null;
       return this.pollMs;
     } catch (e) {
       this.failures += 1;
+      if (e instanceof ProviderError) {
+        // The backend is fine: no forced heartbeat, nothing written, nothing marked ended.
+        if (this.state !== "provider_error") {
+          this.providerFailingSince = now;
+          this.log(`provider error: ${e.message}`);
+        }
+        this.state = "provider_error";
+        return backoffDelay(this.failures, this.pollMs);
+      }
       if (this.state !== "offline") {
         this.offlineSince = now;
         this.log(`offline: ${(e as Error).message}`);
@@ -95,7 +123,13 @@ export class Connector {
       this.lastHeartbeat = now.getTime();
     }
 
-    const observed = await provider.poll();
+    let observed: Awaited<ReturnType<Provider["poll"]>>;
+    try {
+      observed = await provider.poll();
+    } catch (e) {
+      // Provider errors are already sanitised (no command output); keep only the message.
+      throw new ProviderError(`${provider.id}: ${e instanceof Error ? e.message : "unknown error"}`);
+    }
     const previous = new Map<string, SessionStatus>([...this.known].map(([k, v]) => [k, v.status]));
     const transitions = diffObservations(previous, observed, now);
     const capabilities = effectiveCapabilities(provider.id, {
