@@ -1,0 +1,16 @@
+[
+  {
+    "pid": 41001,
+    "cwd": "/home/dev/projects/alpha",
+    "sessionId": "00000000-0000-4000-8000-000000000001",
+    "name": "Refactor billing module",
+    "status": "busy"
+  },
+  {
+    "pid": 41002,
+    "cwd": "/home/dev/projects/beta",
+    "sessionId": "00000000-0000-4000-8000-000000000002",
+    "name": "Fix flaky login test",
+    "status": "idle"
+  }
+]

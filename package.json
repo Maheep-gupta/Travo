@@ -19,7 +19,7 @@
     "connector": "npm run start -w @mc/connector --",
     "typecheck": "npm run typecheck --workspaces --if-present && tsc -p supabase/tests",
     "lint": "eslint .",
-    "test": "vitest run --project unit",
+    "test": "vitest run --project unit --project dom",
     "test:db": "vitest run --project db",
     "test:e2e": "npm run build -w @mc/web && npm run e2e -w @mc/web",
     "check": "npm run typecheck && npm run lint && npm run test"

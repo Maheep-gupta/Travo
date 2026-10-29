@@ -11,18 +11,18 @@ Users can trust Tavro to tell them what their AI coding sessions are doing and w
 
 ## Next task
 
-**M2 follow-up: per-device "Show session names in system notifications" option.** Acceptance criteria:
-- It's off by default and stored per device, next to the existing system-notification switch.
-- When it's on, the body names the session (title or project label) and the host. When it's off, the text stays exactly as generic as it is today.
-- The Settings copy warns that names may appear on the lock screen and in OS notification history.
-- The notification `tag` never contains names or IDs.
-- Unit tests cover both modes.
-- A security-agent review is required, because this relaxes D-009 (so record D-012).
+**M4 groundwork: a provider-error state in the connector.** Today a failed `provider.poll()` (CLI missing, timed out, bad output) is reported as "offline", the same as losing the backend. Acceptance criteria:
+- The connector tells provider failures apart from transport failures, in both its status and its logs.
+- A provider failure never marks sessions ended. Already true via the parser's empty-output rule; add a regression test at the connector level.
+- Heartbeats continue while the provider is failing, so the host stays "online" and its sessions aren't shown as disconnected for the wrong reason.
+- Backoff for provider failures is tested with the mock provider made to fail.
+- No change to the schema, the transport or the `REAL_ADAPTER_ENABLED` gate.
 
 **Waiting on the user** (no work can proceed without them):
 - Choose a project licence.
 - Approve or decline `npm audit` (it's a network call).
 - Approve a push of the local commits.
+- **Approve or reject D-013**, the session names in system notifications. The code is built and inactive behind `SESSION_NAMES_OPTION_APPROVED = false`.
 - Fix Docker, or approve a browser for testing, to unblock M4/M5 and visual QA.
 
 ---
@@ -86,7 +86,12 @@ Users can trust Tavro to tell them what their AI coding sessions are doing and w
   - alerts are cleared on sign-out and backend change;
   - notification tags no longer identify sessions;
   - stored IDs are validated strictly.
-- ⬜ Optional, per device: "show session names in system notifications". Off by default for privacy.
+- 🔒 Session names in system notifications (D-013). It's built, security-reviewed and fixed: scoped per user, off by default, withdrawn when notifications are turned off, with control and bidi characters stripped. It stays **inactive until the user approves**.
+- ✅ Component tests (jsdom and Testing Library, 12 tests) cover:
+  - the watcher: baseline, a single alert with no duplicates, pausing on a preferences or hosts error without losing the change, and clearing on sign-out;
+  - the Alerts page: order, links, mark read, clear-all confirmation, dismiss and the empty state;
+  - the navigation badge label and the tab title.
+  They run in `npm test`.
 - ✅ The Settings card re-reads the permission state and the failed-to-show flag when the tab is focused or becomes visible.
 - ✅ The unread count appears in the tab title ("(2) Tavro") and, where supported, as an app-icon badge through the Badging API. This works even where system notifications don't, such as Android Chrome. Verified by unit tests; badge rendering is unverified because no browser is available.
 - ⬜ A session that drops out of the 500-row list and then returns can alert again (rare).
@@ -99,8 +104,11 @@ Users can trust Tavro to tell them what their AI coding sessions are doing and w
 - ✅ Deep links and refresh on static hosting, documented in docs/QUALITY.md, "Serving the production build". Verified over HTTP against `vite preview` on loopback.
 - ⛔ Install behaviour verified in real browsers: browser automation is blocked, so this needs a manual check by the user.
 
-### M4: Local read-only monitoring ⛔
-Blocked by M5. The Claude Code adapter (`claude agents --json`) is designed in docs/INTEGRATIONS.md and stays disabled.
+### M4: Local read-only monitoring ⛔ (groundwork 🟡)
+- ✅ `ClaudeCodeProvider` and `parseClaudeAgentsJson` are built and disabled. They have 34 tests on synthetic output; see docs/INTEGRATIONS.md for behaviour and the list of things to verify live.
+- ⬜ Connector provider-error state (see Next task).
+
+Enabling it is blocked by M5. The Claude Code adapter (`claude agents --json`) is designed in docs/INTEGRATIONS.md and stays disabled.
 
 ### M5: Security and backend verification ⛔
 Blocked: the Docker engine doesn't respond. Checklist: docs/SECURITY.md, "Before enabling real Claude Code data".

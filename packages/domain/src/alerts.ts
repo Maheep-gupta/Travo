@@ -207,14 +207,38 @@ const NOTIFICATION_BODY: Record<AlertKind, string> = {
   host_reconnected: "A host is reporting again.",
 };
 
+/** Names shown only when the user opted in on this device (D-013). */
+export interface AlertNotificationNames {
+  session?: string | null;
+  host?: string | null;
+}
+
+export const MAX_NOTIFICATION_NAME_LENGTH = 80;
+
+// C0/C1 controls and bidi overrides/isolates: a name must not be able to
+// reorder or fake lines in the notification.
+// eslint-disable-next-line no-control-regex
+const UNSAFE_CHARS = /[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/g;
+
+export function notificationName(value: string | null | undefined): string | null {
+  const v = value?.replace(UNSAFE_CHARS, " ").replace(/\s+/g, " ").trim();
+  if (!v) return null;
+  const chars = Array.from(v); // code points, so emoji are never split
+  return chars.length > MAX_NOTIFICATION_NAME_LENGTH ? `${chars.slice(0, MAX_NOTIFICATION_NAME_LENGTH - 1).join("")}…` : v;
+}
+
 /**
- * Text for an OS-level notification. Deliberately generic: no session titles,
+ * Text for an OS-level notification. Generic by default: no session titles,
  * project names or summaries, because notifications can appear on a lock
- * screen and in OS notification history.
+ * screen and in OS notification history. Names are added only when passed,
+ * i.e. when the user turned that on for this device. Summaries and
+ * transcript text are never included.
  */
-export function alertNotificationText(alert: Pick<TavroAlert, "kind" | "isDemo">): { title: string; body: string } {
-  return {
-    title: `${alert.isDemo ? "Tavro demo" : "Tavro"} · ${ALERT_LABEL[alert.kind]}`,
-    body: NOTIFICATION_BODY[alert.kind],
-  };
+export function alertNotificationText(alert: Pick<TavroAlert, "kind" | "isDemo">, names?: AlertNotificationNames): { title: string; body: string } {
+  const title = `${alert.isDemo ? "Tavro demo" : "Tavro"} · ${ALERT_LABEL[alert.kind]}`;
+  const generic = NOTIFICATION_BODY[alert.kind];
+  const session = notificationName(names?.session);
+  const host = notificationName(names?.host);
+  const where = [session, host].filter(Boolean).join(" · ");
+  return { title, body: where ? `${where}\n${generic}` : generic };
 }

@@ -1,0 +1,14 @@
+[
+  {
+    "pid": 41004,
+    "cwd": "/home/dev/projects/delta",
+    "sessionId": "00000000-0000-4000-8000-000000000004",
+    "name": null,
+    "status": "idle",
+    "model": "synthetic-model",
+    "entrypoint": "cli",
+    "version": "0.0.0-fixture",
+    "updatedAt": "2026-10-29T11:58:00.000Z",
+    "nested": { "anything": [1, 2, 3] }
+  }
+]

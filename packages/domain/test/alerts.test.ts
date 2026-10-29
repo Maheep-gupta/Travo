@@ -5,8 +5,10 @@ import {
   alertNotificationText,
   detectAlerts,
   mergeAlerts,
+  notificationName,
   parseStoredAlerts,
   unreadCount,
+  MAX_NOTIFICATION_NAME_LENGTH,
   MAX_STORED_ALERTS,
   type AlertHostInput,
   type AlertSessionInput,
@@ -270,5 +272,25 @@ describe("alertNotificationText", () => {
       body: "A session is waiting for your approval.",
     });
     expect(alertNotificationText({ kind: "failed", isDemo: true }).title).toBe("Tavro demo · Failed");
+  });
+
+  it("adds names only when given, normalising whitespace and capping length", () => {
+    expect(alertNotificationText({ kind: "failed", isDemo: false }, { session: "  Fix\n auth   tests ", host: "Work laptop" }).body).toBe(
+      "Fix auth tests · Work laptop\nA session reported a failure.",
+    );
+    expect(alertNotificationText({ kind: "host_disconnected", isDemo: false }, { session: null, host: "Desk" }).body).toBe(
+      "Desk\nA host stopped reporting. Its sessions may be out of date.",
+    );
+    expect(alertNotificationText({ kind: "failed", isDemo: false }, { session: "  ", host: "" }).body).toBe("A session reported a failure.");
+    const long = alertNotificationText({ kind: "failed", isDemo: false }, { session: "x".repeat(200) }).body.split("\n")[0] ?? "";
+    expect(long).toHaveLength(MAX_NOTIFICATION_NAME_LENGTH);
+    expect(long.endsWith("…")).toBe(true);
+  });
+
+  it("strips control and bidi characters and never splits an emoji", () => {
+    expect(notificationName("evil‮close\u0007name")).toBe("evil close name");
+    const emoji = notificationName("😀".repeat(100)) ?? "";
+    expect(Array.from(emoji)).toHaveLength(MAX_NOTIFICATION_NAME_LENGTH);
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(emoji)).toBe(false);
   });
 });

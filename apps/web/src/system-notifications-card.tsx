@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
+import { useAlertStore } from "./alerts-context.js";
 import { Notice } from "./components.js";
 import { webStorage } from "./platform.js";
 import {
+  loadNotificationNamesEnabled,
   loadSystemNotificationsEnabled,
+  saveNotificationNamesEnabled,
   requestSystemNotifications,
+  SESSION_NAMES_OPTION_APPROVED,
   saveSystemNotificationsEnabled,
   showSystemNotification,
   systemNotificationsFailed,
@@ -18,6 +22,8 @@ import {
 export function SystemNotificationsCard() {
   const [state, setState] = useState<SystemNotificationState>(() => systemNotificationState());
   const [enabled, setEnabled] = useState(() => loadSystemNotificationsEnabled(webStorage));
+  const scope = useAlertStore().key;
+  const [names, setNames] = useState(() => loadNotificationNamesEnabled(webStorage, scope));
   const [requesting, setRequesting] = useState(false);
   const [testResult, setTestResult] = useState<"sent" | "failed" | null>(null);
   const [backgroundFailed, setBackgroundFailed] = useState(() => systemNotificationsFailed());
@@ -42,6 +48,11 @@ export function SystemNotificationsCard() {
   function setOn(on: boolean) {
     saveSystemNotificationsEnabled(webStorage, on);
     setEnabled(on);
+    // Turning notifications off also withdraws the names opt-in, so it is never silently restored.
+    if (!on) {
+      saveNotificationNamesEnabled(webStorage, scope, false);
+      setNames(false);
+    }
     setTestResult(null);
   }
 
@@ -64,8 +75,8 @@ export function SystemNotificationsCard() {
         <h2 id="h-sysnotif">System notifications on this device</h2>
       </div>
       <p className="card-sub">
-        Shows an operating-system notification when an alert arrives while Tavro is open in a background tab. Notifications say what happened, never
-        which session, because they can appear on a lock screen.
+        Shows an operating-system notification when an alert arrives while Tavro is open in a background tab. They say what happened but
+        not which session, because they can appear on a lock screen.
       </p>
 
       {state === "unsupported" && (
@@ -100,6 +111,27 @@ export function SystemNotificationsCard() {
             </span>
             <input type="checkbox" role="switch" aria-labelledby="sw-sys" aria-describedby="sw-sys-hint" checked={enabled} onChange={(e) => setOn(e.target.checked)} />
           </label>
+          {enabled && SESSION_NAMES_OPTION_APPROVED && (
+            <label className="switch">
+              <span className="label">
+                <span id="sw-names">Show session names</span>
+                <small id="sw-names-hint">
+                  Adds the session and host name. Anyone who can see this device's lock screen or notification history can read them. Signing out doesn't remove notifications already shown.
+                </small>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                aria-labelledby="sw-names"
+                aria-describedby="sw-names-hint"
+                checked={names}
+                onChange={(e) => {
+                  saveNotificationNamesEnabled(webStorage, scope, e.target.checked);
+                  setNames(e.target.checked);
+                }}
+              />
+            </label>
+          )}
           {enabled && (
             <div className="row" style={{ marginTop: "var(--sp-2)" }}>
               <button type="button" className="btn small" onClick={sendTest}>

@@ -11,6 +11,16 @@ export default defineConfig({
         },
       },
       {
+        // React component tests (Testing Library on jsdom). Kept apart from
+        // "unit" so pure tests stay on the faster node environment.
+        test: {
+          name: "dom",
+          include: ["apps/web/src/**/*.dom.test.tsx"],
+          environment: "jsdom",
+          setupFiles: ["apps/web/src/test-setup.ts"],
+        },
+      },
+      {
         // Requires `npm run db:start` (local Supabase in Docker).
         test: {
           name: "db",

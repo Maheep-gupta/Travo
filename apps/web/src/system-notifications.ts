@@ -6,7 +6,7 @@
 // on/off switch is separate from the browser permission so users can mute
 // Tavro without digging through browser settings.
 import type { KeyValueStorage } from "@mc/api-client/demo";
-import { alertNotificationText, type TavroAlert } from "@mc/domain";
+import { alertNotificationText, type AlertNotificationNames, type TavroAlert } from "@mc/domain";
 
 export type SystemNotificationState = "unsupported" | "default" | "granted" | "denied";
 
@@ -51,6 +51,37 @@ export async function requestSystemNotifications(api: NotificationApi | null = n
 }
 
 const ENABLED_KEY = "tavro.systemNotifications.v1";
+/**
+ * D-013 (session names in notifications) relaxes the D-009 privacy default and
+ * is awaiting the product owner's approval. Until then the option is neither
+ * offered nor honoured.
+ */
+export const SESSION_NAMES_OPTION_APPROVED = false;
+
+/**
+ * Opt-in consent is personal, so it is scoped like the alert list (backend +
+ * user): another person signing in on the same browser starts with it off.
+ */
+function namesKey(scope: string): string {
+  return `tavro.systemNotificationNames.v1:${scope}`;
+}
+
+export function loadNotificationNamesEnabled(storage: KeyValueStorage, scope: string, approved = SESSION_NAMES_OPTION_APPROVED): boolean {
+  if (!approved) return false;
+  try {
+    return storage.getItem(namesKey(scope)) === "on";
+  } catch {
+    return false;
+  }
+}
+
+export function saveNotificationNamesEnabled(storage: KeyValueStorage, scope: string, enabled: boolean): void {
+  try {
+    void (enabled ? storage.setItem(namesKey(scope), "on") : storage.removeItem(namesKey(scope)));
+  } catch {
+    // Blocked storage: the setting lasts for this visit only.
+  }
+}
 
 export function loadSystemNotificationsEnabled(storage: KeyValueStorage): boolean {
   try {
@@ -83,10 +114,15 @@ export function systemNotificationsFailed(): boolean {
  * layer because Safari ignores it. No `actions` or `renotify`: both throw or
  * are unsupported for page-created notifications.
  */
-export function showSystemNotification(alert: TavroAlert, onClick: () => void, api: NotificationApi | null = notificationApi()): boolean {
+export function showSystemNotification(
+  alert: TavroAlert,
+  onClick: () => void,
+  api: NotificationApi | null = notificationApi(),
+  names?: AlertNotificationNames,
+): boolean {
   if (!api || api.permission !== "granted") return false;
   try {
-    const { title, body } = alertNotificationText(alert);
+    const { title, body } = alertNotificationText(alert, names);
     // Non-identifying tag: OS notification history must not hold session or host ids.
     const n = new api(title, { body, tag: `tavro:${alert.kind}`, icon: "/icon-192.png" });
     open.add(n);

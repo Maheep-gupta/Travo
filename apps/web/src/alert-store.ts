@@ -14,7 +14,8 @@ export class AlertStore {
 
   constructor(
     private readonly storage: KeyValueStorage,
-    private readonly key: string,
+    /** Storage key; also scopes per-user settings such as notification names. */
+    readonly key: string,
   ) {
     this.alerts = this.read() ?? [];
   }

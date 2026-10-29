@@ -1,0 +1,29 @@
+[
+  {
+    "pid": 41005,
+    "cwd": "/home/dev/projects/epsilon",
+    "sessionId": "00000000-0000-4000-8000-000000000005",
+    "name": "Write migration",
+    "status": "busy"
+  },
+  {
+    "pid": 41006,
+    "cwd": "/home/dev/projects/zeta",
+    "name": "Entry without a session id",
+    "status": "idle"
+  },
+  "not-an-object",
+  null,
+  {
+    "pid": 41007,
+    "cwd": 42,
+    "sessionId": "00000000-0000-4000-8000-000000000007",
+    "status": "idle"
+  },
+  {
+    "pid": 41008,
+    "cwd": "/home/dev/projects/eta",
+    "sessionId": "00000000-0000-4000-8000-000000000008",
+    "status": "idle"
+  }
+]

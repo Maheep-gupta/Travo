@@ -1,0 +1,9 @@
+[
+  {
+    "pid": 41003,
+    "cwd": "/home/dev/projects/gamma",
+    "sessionId": "00000000-0000-4000-8000-000000000003",
+    "name": "Add rate limiter",
+    "status": "awaiting_permission"
+  }
+]

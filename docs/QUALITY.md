@@ -6,7 +6,7 @@
 |---|---|---|
 | Type check (strict, all workspaces and DB tests) | `npm run typecheck` | Available |
 | Lint, including the platform-neutrality rules for `@mc/domain` | `npm run lint` | Available |
-| Unit tests | `npm test` | Available |
+| Unit and component tests (vitest "unit" in Node, "dom" in jsdom) | `npm test` | Available. 143 tests as of 2026-10-30. Component tests use jsdom, not a real browser, so layout, CSS and real notification APIs aren't covered. |
 | Production web build | `npm run build -w @mc/web` | Available |
 | Browser checks (65) | `npm run test:e2e` | **Unavailable.** Endpoint protection kills headless Chrome and Edge. |
 | RLS and isolation tests | `npm run test:db` | **Unavailable.** The Docker engine doesn't respond. |

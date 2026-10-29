@@ -4,11 +4,11 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyn
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { DEFAULT_NOTIFICATION_PREFS } from "@mc/contracts/constants";
-import { ALERT_LABEL, HEARTBEAT_INTERVAL_MS, alertAllowed, detectAlerts, hostConnectivity, type AlertSnapshot, type StoredAlert } from "@mc/domain";
+import { ALERT_LABEL, HEARTBEAT_INTERVAL_MS, alertAllowed, detectAlerts, hostConnectivity, notificationName, type AlertSnapshot, type StoredAlert } from "@mc/domain";
 import { useApi } from "./api-context.js";
 import { AlertStore, alertStorageKey } from "./alert-store.js";
 import { webStorage } from "./platform.js";
-import { closeSystemNotifications, loadSystemNotificationsEnabled, showSystemNotification } from "./system-notifications.js";
+import { closeSystemNotifications, loadNotificationNamesEnabled, loadSystemNotificationsEnabled, showSystemNotification } from "./system-notifications.js";
 
 const AlertStoreContext = createContext<AlertStore | null>(null);
 
@@ -109,12 +109,23 @@ function AlertWatcher({ store }: { store: AlertStore }) {
       const first = added[0];
       if (first) setAnnouncement(added.length === 1 ? `New alert: ${ALERT_LABEL[first.kind]}` : `${added.length} new alerts`);
     } else if (loadSystemNotificationsEnabled(webStorage)) {
+      // Names only if the user opted in on this device (D-013); generic otherwise.
+      const withNames = loadNotificationNamesEnabled(webStorage, store.key);
+      const sessionById = new Map(sessions.data.map((s) => [s.id, s]));
+      const hostById = new Map(hosts.data.map((h) => [h.id, h]));
       for (const a of added) {
-        showSystemNotification(a, () => {
-          window.focus();
-          store.markRead(a.id);
-          void navigate(alertHref(a));
-        });
+        const s = a.sessionId ? sessionById.get(a.sessionId) : undefined;
+        const names = withNames ? { session: s ? notificationName(s.title) ?? s.project_label : null, host: hostById.get(a.hostId)?.name ?? null } : undefined;
+        showSystemNotification(
+          a,
+          () => {
+            window.focus();
+            store.markRead(a.id);
+            void navigate(alertHref(a));
+          },
+          undefined,
+          names,
+        );
       }
     }
   }, [api.kind, sessions.data, sessions.error, hosts.data, hosts.dataUpdatedAt, hosts.error, prefs.data, prefs.isLoading, prefs.error, store, navigate]);

@@ -3,8 +3,10 @@ import { MemoryStorage } from "@mc/api-client/demo";
 import type { TavroAlert } from "@mc/domain";
 import { AlertStore, alertStorageKey } from "./alert-store.js";
 import {
+  loadNotificationNamesEnabled,
   loadSystemNotificationsEnabled,
   requestSystemNotifications,
+  saveNotificationNamesEnabled,
   saveSystemNotificationsEnabled,
   showSystemNotification,
   systemNotificationsFailed,
@@ -152,6 +154,30 @@ describe("system notifications", () => {
     expect(systemNotificationsFailed()).toBe(true);
     expect(showSystemNotification(alert("b"), vi.fn(), fakeApi({ permission: "granted" }).api)).toBe(true);
     expect(systemNotificationsFailed()).toBe(false);
+  });
+
+  it("adds names only when passed, and never puts them in the tag", () => {
+    const { api, created } = fakeApi({ permission: "granted" });
+    showSystemNotification(alert("a"), vi.fn(), api);
+    showSystemNotification(alert("b"), vi.fn(), api, { session: "Fix auth tests", host: "Work laptop" });
+    expect(created[0]?.options?.body).toBe("A session reported a failure.");
+    expect(created[1]?.options?.body).toBe("Fix auth tests · Work laptop\nA session reported a failure.");
+    expect(created[1]?.options?.tag).toBe("tavro:failed");
+  });
+
+  it("keeps the session-names option off by default, per user, and inert until approved", () => {
+    const storage = new MemoryStorage();
+    const userA = alertStorageKey("supabase", "a");
+    const userB = alertStorageKey("supabase", "b");
+    expect(loadNotificationNamesEnabled(storage, userA, true)).toBe(false);
+    saveNotificationNamesEnabled(storage, userA, true);
+    expect(loadNotificationNamesEnabled(storage, userA, true)).toBe(true);
+    // Consent is personal: another user on the same browser starts with it off.
+    expect(loadNotificationNamesEnabled(storage, userB, true)).toBe(false);
+    // Not honoured while D-013 awaits approval, even if a value is stored.
+    expect(loadNotificationNamesEnabled(storage, userA)).toBe(false);
+    saveNotificationNamesEnabled(storage, userA, false);
+    expect(loadNotificationNamesEnabled(storage, userA, true)).toBe(false);
   });
 
   it("keeps the per-device switch off by default", () => {
