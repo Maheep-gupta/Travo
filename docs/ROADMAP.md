@@ -11,13 +11,12 @@ Users can trust Tavro to tell them what their AI coding sessions are doing and w
 
 ## Next task
 
-**M1: dashboard filters in the URL, plus the remaining dashboard accessibility items.** Acceptance criteria:
-- The status-group filter, provider filter and search query live in the URL query string, so they survive a refresh and work with back and forward. Verify the current behaviour first and keep whatever already works.
-- An invalid query value falls back to "no filter" rather than an error.
-- The dashboard's active-filter live region stays mounted, so the first change is announced and the "Clear filters" text isn't read as part of the announcement.
-- Unit tests cover parsing and serialising the filter state.
-
-Must not change: attention-first sorting, the existing routes, and the security baseline.
+**M1: accessible form errors on Setup and Sign-in.** Acceptance criteria:
+- A field-level problem marks its input with `aria-invalid` and links the message with `aria-describedby`.
+- Server or connection errors stay in a form-level `role="alert"`.
+- Focus moves to the first invalid field when a submit is rejected.
+- No change to validation rules or to the privileged-key rejection.
+- Extract any parsing into pure functions with unit tests.
 
 ---
 
@@ -64,7 +63,7 @@ Must not change: attention-first sorting, the existing routes, and the security 
   - loading announcements;
   - heading order;
   - copy that implied replies were supported, corrected.
-- ⬜ Filter state in the URL (see Next task).
+- ✅ Filters already lived in the URL. They're now validated (unknown and prototype-named values are ignored, and search is capped at 200 characters). Group and integration toggles are history steps, and the live region is always mounted. Verified by 5 unit tests.
 - ⬜ Setup and Sign-in field errors linked to their inputs with `aria-invalid` and `aria-describedby`.
 
 ### M2: Tavro Alerts ✅ (foreground only)
@@ -81,7 +80,8 @@ Must not change: attention-first sorting, the existing routes, and the security 
   - notification tags no longer identify sessions;
   - stored IDs are validated strictly.
 - ⬜ Optional, per device: "show session names in system notifications". Off by default for privacy.
-- ⬜ The Settings card reads the permission state and the failed-to-show flag only when it mounts. It should refresh when the tab becomes visible.
+- ✅ The Settings card re-reads the permission state and the failed-to-show flag when the tab is focused or becomes visible.
+- ✅ The unread count appears in the tab title ("(2) Tavro") and, where supported, as an app-icon badge through the Badging API. This works even where system notifications don't, such as Android Chrome. Verified by unit tests; badge rendering is unverified because no browser is available.
 - ⬜ A session that drops out of the 500-row list and then returns can alert again (rare).
 - ⬜ An alert ID can collide if a provider changes status without updating `last_activity_at`. Revisit with the real adapter.
 - ⛔ Real-browser check of the permission prompt, notification display, click-to-open and the 4-tab layout: browser automation is blocked.

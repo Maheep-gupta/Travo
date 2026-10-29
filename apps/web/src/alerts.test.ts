@@ -11,6 +11,7 @@ import {
   systemNotificationState,
   type NotificationApi,
 } from "./system-notifications.js";
+import { titleWithUnread, updateAppBadge } from "./unread-indicator.js";
 
 const alert = (id: string, at = "2026-10-29T12:00:00Z"): TavroAlert => ({ id, kind: "failed", sessionId: "s1", hostId: "h1", at, isDemo: false });
 const KEY = alertStorageKey("demo", "u1");
@@ -160,5 +161,24 @@ describe("system notifications", () => {
     expect(loadSystemNotificationsEnabled(storage)).toBe(true);
     saveSystemNotificationsEnabled(storage, false);
     expect(loadSystemNotificationsEnabled(storage)).toBe(false);
+  });
+});
+
+describe("unread indicator", () => {
+  it("prefixes the title with the unread count", () => {
+    expect(titleWithUnread(0)).toBe("Tavro");
+    expect(titleWithUnread(3)).toBe("(3) Tavro");
+    expect(titleWithUnread(150)).toBe("(99+) Tavro");
+  });
+
+  it("sets and clears the app badge where supported, tolerating failures", async () => {
+    const api = { setAppBadge: vi.fn(() => Promise.resolve()), clearAppBadge: vi.fn(() => Promise.reject(new Error("not installed"))) };
+    updateAppBadge(2, api);
+    updateAppBadge(0, api);
+    expect(api.setAppBadge).toHaveBeenCalledWith(2);
+    expect(api.clearAppBadge).toHaveBeenCalledOnce();
+    await Promise.resolve(); // the rejection is swallowed, not unhandled
+    expect(() => updateAppBadge(1, {})).not.toThrow();
+    expect(() => updateAppBadge(1, { setAppBadge: () => { throw new Error("sync"); }, clearAppBadge: vi.fn() })).not.toThrow();
   });
 });

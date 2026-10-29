@@ -9,6 +9,7 @@ import { useApi, useApiContext, useLiveUpdates } from "./api-context.js";
 import { ErrorState, Notice, Spinner } from "./components.js";
 import { BrandMark, IconBell, IconHost, IconSessions, IconSettings } from "./icons.js";
 import { PageErrorBoundary, retryableLazy } from "./page-loading.js";
+import { BASE_TITLE, titleWithUnread, updateAppBadge } from "./unread-indicator.js";
 import { DashboardPage } from "./pages/DashboardPage.js";
 
 // Route-level code splitting: only the dashboard ships in the initial chunk.
@@ -147,6 +148,19 @@ function Shell() {
   const { pathname } = useLocation();
   useLiveUpdates();
   const unread = unreadCount(useAlerts());
+
+  useEffect(() => {
+    document.title = titleWithUnread(unread);
+    updateAppBadge(unread);
+  }, [unread]);
+  // Reset when leaving the signed-in shell (sign-out, backend change).
+  useEffect(
+    () => () => {
+      document.title = BASE_TITLE;
+      updateAppBadge(0);
+    },
+    [],
+  );
 
   // Move focus to the page on route change so keyboard and screen-reader users start at the new content.
   useEffect(() => {

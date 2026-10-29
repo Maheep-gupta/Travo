@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Notice } from "./components.js";
 import { webStorage } from "./platform.js";
 import {
@@ -20,7 +20,24 @@ export function SystemNotificationsCard() {
   const [enabled, setEnabled] = useState(() => loadSystemNotificationsEnabled(webStorage));
   const [requesting, setRequesting] = useState(false);
   const [testResult, setTestResult] = useState<"sent" | "failed" | null>(null);
-  const failed = testResult === "failed" || systemNotificationsFailed();
+  const [backgroundFailed, setBackgroundFailed] = useState(() => systemNotificationsFailed());
+  const failed = testResult === "failed" || backgroundFailed;
+
+  // Permission can change in browser settings, and a background notification can
+  // fail while Settings is open; re-read both whenever the user comes back.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      setState(systemNotificationState());
+      setBackgroundFailed(systemNotificationsFailed());
+    };
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, []);
 
   function setOn(on: boolean) {
     saveSystemNotificationsEnabled(webStorage, on);
