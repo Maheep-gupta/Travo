@@ -7,7 +7,8 @@ Start every session by reading `docs/ROADMAP.md` (current milestone, next task, 
 ## Operating mode (approved by the user 2026-10-29)
 
 - Work autonomously through the roadmap inside this repository: routine code, tests, docs and reversible design decisions need no per-edit approval. Use `/tavro-ship` for every unit of work.
-- Git is local only. Commit each verified unit of work. **Never push, add a remote, or deploy.** No AI attribution lines in commits.
+- Commit each verified unit of work locally. Remote `origin` = **public** repo `github.com/Maheep-gupta/Travo` (pushed 2026-10-29 with user approval). **Push only when the user asks; never deploy, change remotes, or touch credentials.** The repo-local identity is `Maheep Gupta <maheepgupta321@gmail.com>`; never change the global Git identity. No AI attribution lines in commits.
+- Everything committed becomes public on push: never commit secrets, real session data, or internal company information.
 - **Ask first** for: anything outside this folder (e.g. `~/.claude/settings.json` hooks), network services, cloud/paid accounts, deployment, enabling the real adapter, remote actions, irreversible data changes, or anything touching corporate policy.
 - Specialist agents live in `.claude/agents/`. Spawn them only where an independent read adds value (QA after features, security for sensitive changes). Report honestly which agents actually ran.
 
