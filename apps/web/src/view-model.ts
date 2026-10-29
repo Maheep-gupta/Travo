@@ -1,5 +1,5 @@
-import type { HostRow, SessionRow } from "@mc/contracts";
-import { compareByAttention, displayStatus, hostConnectivity, type DisplayStatus, type HostConnectivity } from "@mc/domain";
+import type { HostRow, ProviderId, SessionRow } from "@mc/contracts";
+import { PROVIDERS, compareByAttention, displayStatus, hostConnectivity, type DisplayStatus, type HostConnectivity } from "@mc/domain";
 
 export interface SessionView extends SessionRow {
   displayStatus: DisplayStatus;
@@ -35,7 +35,8 @@ export const STATUS_GROUPS: Record<StatusGroup, { label: string; statuses: Displ
 };
 
 export function isStatusGroup(value: string | null): value is StatusGroup {
-  return value !== null && value in STATUS_GROUPS;
+  // hasOwn, not `in`: "toString" and other prototype keys are not groups.
+  return value !== null && Object.hasOwn(STATUS_GROUPS, value);
 }
 
 export function countByGroup(views: readonly { displayStatus: DisplayStatus }[]): Record<StatusGroup, number> {
@@ -52,4 +53,38 @@ export function countByGroup(views: readonly { displayStatus: DisplayStatus }[])
 export function prefsEqual<T extends object>(a: T, b: T): boolean {
   const keys = Object.keys(a) as (keyof T)[];
   return keys.length === Object.keys(b).length && keys.every((k) => a[k] === b[k]);
+}
+
+/** Dashboard filters, kept in the URL so they survive refresh and history navigation. */
+export interface DashboardFilter {
+  group: StatusGroup | null;
+  provider: ProviderId | null;
+  query: string;
+}
+
+export const MAX_QUERY_LENGTH = 200;
+
+function isProviderId(value: string | null): value is ProviderId {
+  return value !== null && Object.hasOwn(PROVIDERS, value);
+}
+
+/** Reads filters from URL search params. Unknown or malformed values mean "no filter". */
+export function parseDashboardFilter(params: URLSearchParams): DashboardFilter {
+  const group = params.get("group");
+  const provider = params.get("provider");
+  return {
+    group: isStatusGroup(group) ? group : null,
+    provider: isProviderId(provider) ? provider : null,
+    query: (params.get("q") ?? "").slice(0, MAX_QUERY_LENGTH),
+  };
+}
+
+/** Writes filters back, keeping any unrelated params and omitting empty ones. */
+export function dashboardFilterParams(filter: DashboardFilter, base: URLSearchParams = new URLSearchParams()): URLSearchParams {
+  const next = new URLSearchParams(base);
+  const set = (key: string, value: string | null) => (value ? next.set(key, value) : next.delete(key));
+  set("group", filter.group);
+  set("provider", filter.provider);
+  set("q", filter.query.trim() ? filter.query.slice(0, MAX_QUERY_LENGTH) : null);
+  return next;
 }

@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { HostRow, SessionRow } from "@mc/contracts";
-import { STATUS_GROUPS, buildSessionViews, countByGroup, prefsEqual } from "./view-model.js";
+import {
+  MAX_QUERY_LENGTH,
+  STATUS_GROUPS,
+  buildSessionViews,
+  countByGroup,
+  dashboardFilterParams,
+  isStatusGroup,
+  parseDashboardFilter,
+  prefsEqual,
+} from "./view-model.js";
 import type { DisplayStatus } from "@mc/domain";
 
 const now = new Date("2026-10-29T12:00:00Z");
@@ -76,5 +85,32 @@ describe("prefsEqual", () => {
     const a = { on_failed: true, on_completed: false };
     expect(prefsEqual(a, { on_failed: true, on_completed: false })).toBe(true);
     expect(prefsEqual(a, { on_failed: true, on_completed: true })).toBe(false);
+  });
+});
+
+describe("dashboard filter in the URL", () => {
+  it("parses valid values", () => {
+    expect(parseDashboardFilter(new URLSearchParams("group=attention&provider=mock&q=deploy"))).toEqual({ group: "attention", provider: "mock", query: "deploy" });
+  });
+
+  it("treats unknown, prototype-named and missing values as no filter", () => {
+    expect(parseDashboardFilter(new URLSearchParams("group=toString&provider=constructor"))).toEqual({ group: null, provider: null, query: "" });
+    expect(parseDashboardFilter(new URLSearchParams("group=nope&provider=xyz"))).toEqual({ group: null, provider: null, query: "" });
+    expect(isStatusGroup("__proto__")).toBe(false);
+  });
+
+  it("caps the search query length", () => {
+    expect(parseDashboardFilter(new URLSearchParams({ q: "x".repeat(500) })).query).toHaveLength(MAX_QUERY_LENGTH);
+  });
+
+  it("serialises, omitting empty values and keeping unrelated params", () => {
+    const base = new URLSearchParams("demo=1&q=old");
+    expect(dashboardFilterParams({ group: "done", provider: null, query: "  " }, base).toString()).toBe("demo=1&group=done");
+    expect(dashboardFilterParams({ group: null, provider: "mock", query: "abc" }).toString()).toBe("provider=mock&q=abc");
+  });
+
+  it("round-trips", () => {
+    const f = { group: "offline", provider: "claude-code", query: "fix tests" } as const;
+    expect(parseDashboardFilter(dashboardFilterParams(f))).toEqual(f);
   });
 });

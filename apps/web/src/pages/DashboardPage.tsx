@@ -1,12 +1,20 @@
 import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router";
-import type { ProviderId } from "@mc/contracts";
 import { PROVIDERS, matchesFilter, needsAttention, relativeTime } from "@mc/domain";
 import { useApi } from "../api-context.js";
 import { DemoTag, EmptyState, ErrorState, PageHeader, SessionListSkeleton, StatusBadge } from "../components.js";
 import { useNow, useSessionViews } from "../hooks.js";
 import { IconFolder, IconHost, IconSearch, IconSessions } from "../icons.js";
-import { STATUS_GROUPS, countByGroup, isStatusGroup, type SessionView, type StatusGroup } from "../view-model.js";
+import {
+  MAX_QUERY_LENGTH,
+  STATUS_GROUPS,
+  countByGroup,
+  dashboardFilterParams,
+  parseDashboardFilter,
+  type DashboardFilter,
+  type SessionView,
+  type StatusGroup,
+} from "../view-model.js";
 
 const GROUP_ORDER: StatusGroup[] = ["attention", "working", "done", "offline"];
 
@@ -15,17 +23,14 @@ export function DashboardPage() {
   const { data, isLoading, error, refetch } = useSessionViews();
   const now = useNow();
   const [params, setParams] = useSearchParams();
-  const groupParam = params.get("group");
-  const group = isStatusGroup(groupParam) ? groupParam : null;
-  const provider = params.get("provider") as ProviderId | null;
-  const query = params.get("q") ?? "";
+  const filter = parseDashboardFilter(params);
+  const { group, provider, query } = filter;
 
-  const setParam = (key: string, value: string | null) => {
-    const next = new URLSearchParams(params);
-    if (value) next.set(key, value);
-    else next.delete(key);
-    setParams(next, { replace: true });
-  };
+  // Toggling a group or integration is a history step (Back undoes it);
+  // typing in search replaces the entry so each keystroke isn't one.
+  const update = (patch: Partial<DashboardFilter>, mode: "push" | "replace") =>
+    setParams(dashboardFilterParams({ ...filter, ...patch }, params), { replace: mode === "replace" });
+  const clearFilters = () => setParams(dashboardFilterParams({ group: null, provider: null, query: "" }, params));
 
   const counts = useMemo(() => countByGroup(data ?? []), [data]);
   const providersPresent = useMemo(() => [...new Set((data ?? []).map((s) => s.provider))], [data]);
@@ -68,7 +73,7 @@ export function DashboardPage() {
                 className={`stat g-${g} ${g === "attention" && counts.attention > 0 ? "hot" : ""}`}
                 aria-pressed={group === g}
                 aria-label={`${STATUS_GROUPS[g].label}: ${counts[g]} ${counts[g] === 1 ? "session" : "sessions"}`}
-                onClick={() => setParam("group", group === g ? null : g)}
+                onClick={() => update({ group: group === g ? null : g }, "push")}
               >
                 <strong>{counts[g]}</strong>
                 <span>
@@ -88,14 +93,20 @@ export function DashboardPage() {
                 type="search"
                 placeholder="Search title, project or activity"
                 value={query}
-                onChange={(e) => setParam("q", e.target.value || null)}
+                maxLength={MAX_QUERY_LENGTH}
+                onChange={(e) => update({ query: e.target.value }, "replace")}
               />
             </label>
             <label>
               <span className="sr-only">Integration</span>
-              <select className="select" value={provider ?? ""} onChange={(e) => setParam("provider", e.target.value || null)}>
+              <select
+                className="select"
+                value={provider ?? ""}
+                onChange={(e) => update({ provider: parseDashboardFilter(new URLSearchParams({ provider: e.target.value })).provider }, "push")}
+              >
                 <option value="">All integrations</option>
-                {providersPresent.map((p) => (
+                {/* Keep a URL-selected integration visible even when no session uses it right now. */}
+                {(provider && !providersPresent.includes(provider) ? [...providersPresent, provider] : providersPresent).map((p) => (
                   <option key={p} value={p}>
                     {PROVIDERS[p].label}
                   </option>
@@ -103,11 +114,17 @@ export function DashboardPage() {
               </select>
             </label>
           </div>
+          {/* Always mounted so the first filter change is announced; holds only the summary text. */}
+          <p className="sr-only" role="status" aria-live="polite">
+            {filtering ? `Showing ${filtered.length} of ${data?.length ?? 0} sessions${group ? `, ${STATUS_GROUPS[group].label}` : ""}` : ""}
+          </p>
           {filtering && (
-            <div className="active-filter" role="status">
-              Showing {filtered.length} of {data?.length ?? 0}
-              {group && <> · {STATUS_GROUPS[group].label}</>}
-              <button type="button" className="btn ghost small" onClick={() => setParams(new URLSearchParams(), { replace: true })}>
+            <div className="active-filter">
+              <span aria-hidden="true">
+                Showing {filtered.length} of {data?.length ?? 0}
+                {group && <> · {STATUS_GROUPS[group].label}</>}
+              </span>
+              <button type="button" className="btn ghost small" onClick={clearFilters}>
                 Clear filters
               </button>
             </div>
@@ -126,7 +143,7 @@ export function DashboardPage() {
             <div className="section">
               <EmptyState title="Nothing matches" icon={<IconSearch />}>
                 <p>Try a different search or clear the filters.</p>
-                <button type="button" className="btn" onClick={() => setParams(new URLSearchParams(), { replace: true })}>
+                <button type="button" className="btn" onClick={clearFilters}>
                   Clear filters
                 </button>
               </EmptyState>
