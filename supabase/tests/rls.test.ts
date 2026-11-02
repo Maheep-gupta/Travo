@@ -145,12 +145,46 @@ describe("host isolation", () => {
   });
 
   it("heartbeat updates only the caller's host", async () => {
-    const r = await hostA.client.rpc("host_heartbeat", { p_platform: "win32", p_connector_version: "t", p_remote_control_allowed: false });
+    const r = await hostA.client.rpc("host_heartbeat", { p_platform: "win32", p_connector_version: "t", p_remote_control_allowed: false, p_provider_ok: true });
     expect(r.error).toBeNull();
     const h = await ownerA.client.from("hosts").select("last_seen_at, remote_control_allowed").eq("id", hostA.id).single();
     expect(h.data?.last_seen_at).not.toBeNull();
     expect(h.data?.remote_control_allowed).toBe(false);
-    expect((await ownerA.client.rpc("host_heartbeat", { p_platform: "x", p_connector_version: "x", p_remote_control_allowed: true })).error).not.toBeNull();
+    // 42501 specifically: the call must reach the function and be refused, not fail on a missing signature.
+    const denied = await ownerA.client.rpc("host_heartbeat", { p_platform: "x", p_connector_version: "x", p_remote_control_allowed: true, p_provider_ok: true });
+    expect(denied.error?.code).toBe("42501");
+  });
+
+  it("source health (schema v2) is set and cleared only through the heartbeat, keeping the failure start", async () => {
+    const beat = (ok: boolean) =>
+      hostA.client.rpc("host_heartbeat", { p_platform: "win32", p_connector_version: "t", p_remote_control_allowed: false, p_provider_ok: ok });
+    const since = async () => (await ownerA.client.from("hosts").select("provider_error_since").eq("id", hostA.id).single()).data?.provider_error_since as string | null;
+
+    expect((await beat(false)).error).toBeNull();
+    const first = await since();
+    expect(first).not.toBeNull();
+    expect((await beat(false)).error).toBeNull();
+    expect(await since()).toBe(first); // ongoing failure keeps its start
+    expect((await beat(true)).error).toBeNull();
+    expect(await since()).toBeNull();
+
+    // A missing health value is rejected rather than treated as healthy.
+    const missing = await hostA.client.rpc("host_heartbeat", { p_platform: "x", p_connector_version: "x", p_remote_control_allowed: false, p_provider_ok: null });
+    expect(missing.error).not.toBeNull();
+    // The v1 signature no longer exists.
+    expect((await hostA.client.rpc("host_heartbeat", { p_platform: "x", p_connector_version: "x", p_remote_control_allowed: false })).error).not.toBeNull();
+  });
+
+  it("nobody can write provider_error_since directly", async () => {
+    const owner = await ownerA.client.from("hosts").update({ provider_error_since: new Date().toISOString() }).eq("id", hostA.id).select("id");
+    expect(owner.error).not.toBeNull(); // no column UPDATE grant
+    const host = await hostA.client.from("hosts").update({ provider_error_since: null }).eq("id", hostA.id).select("id");
+    expect(host.error ?? (host.data?.length === 0 ? null : "updated")).not.toBe("updated");
+  });
+
+  it("another owner cannot see a host's source health", async () => {
+    const r = await ownerB.client.from("hosts").select("provider_error_since").eq("id", hostA.id);
+    expect(r.data ?? []).toHaveLength(0);
   });
 });
 
@@ -228,7 +262,7 @@ describe("revocation", () => {
     // Same (still unexpired) JWT, but the host row is revoked.
     expect((await host.client.from("sessions").insert({ ...sessionRow(), host_id: host.id })).error).not.toBeNull();
     expect((await host.client.from("sessions").select("id")).data).toEqual([]);
-    expect((await host.client.rpc("host_heartbeat", { p_platform: "x", p_connector_version: "x", p_remote_control_allowed: null })).error).not.toBeNull();
+    expect((await host.client.rpc("host_heartbeat", { p_platform: "x", p_connector_version: "x", p_remote_control_allowed: null, p_provider_ok: true })).error?.code).toBe("42501");
 
     const undo = await owner.client.from("hosts").update({ revoked_at: null }).eq("id", host.id);
     expect(undo.error).not.toBeNull();

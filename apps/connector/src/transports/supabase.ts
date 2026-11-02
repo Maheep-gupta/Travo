@@ -41,6 +41,7 @@ export class SupabaseTransport implements Transport {
       p_platform: input.platform,
       p_connector_version: input.connector_version,
       p_remote_control_allowed: input.remote_control_allowed,
+      p_provider_ok: input.provider_ok,
     });
     if (error) throw new Error(`heartbeat failed (${error.code})`);
   }

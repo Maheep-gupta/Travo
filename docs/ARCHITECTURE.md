@@ -52,7 +52,20 @@ There's no separate application server. Following the approved BYOS decision (do
 | Short JWT lifetime (15 minutes, `config.toml`) | Realtime caches its permission checks until the token expires | Never |
 | Live updates: Supabase Realtime, used to trigger query refetches | Realtime respects RLS. Data is always re-read through RLS-checked queries rather than trusted from the change payload. | Never |
 
-## Data model (schema v1)
+## Data model (schema v2)
+
+**v2, 2026-11-02:**
+- Adds `hosts.provider_error_since` (session source health).
+- Replaces `host_heartbeat` with a 4-argument version.
+- Clients require exactly v2 (`MIN_SCHEMA_VERSION = MAX_SCHEMA_VERSION = 2`). No project had applied v1, so v1 isn't supported.
+
+**Migration recovery:**
+- There are no down-migrations.
+- On a local project, `npm run db:reset` rebuilds from all migrations.
+- On a user's own project, a failed v2 apply leaves `app_meta.schema_version = 1`. The app then refuses to run, with a "Database needs attention" message, instead of misreading data.
+- Unverified: whether the Supabase CLI applies each migration file in one transaction. Check this when Docker works, before relying on it.
+
+Base tables (v1):
 
 The tables are:
 - `app_meta`

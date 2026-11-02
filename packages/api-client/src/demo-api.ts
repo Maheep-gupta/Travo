@@ -17,6 +17,13 @@ export interface DemoApiOptions {
   /** Simulated connector outage cycle: online for this long, then offline (default 4 min / 2 min). */
   onlineMs?: number;
   offlineMs?: number;
+  /**
+   * Simulated session-source outage inside each online period: the host keeps
+   * heartbeating but cannot read its sessions (default: from 90s, for 45s).
+   * Set sourceOutageMs to 0 to disable.
+   */
+  sourceOutageAtMs?: number;
+  sourceOutageMs?: number;
   seed?: number;
   now?: () => number;
 }
@@ -40,6 +47,8 @@ export function createDemoApi(opts: DemoApiOptions = {}): TavroApi {
   const tickMs = opts.tickMs ?? 4000;
   const onlineMs = opts.onlineMs ?? 4 * 60_000;
   const offlineMs = opts.offlineMs ?? 2 * 60_000;
+  const sourceOutageAtMs = opts.sourceOutageAtMs ?? 90_000;
+  const sourceOutageMs = opts.sourceOutageMs ?? 45_000;
   const startedAt = now();
   const iso = (t: number) => new Date(t).toISOString();
 
@@ -59,6 +68,7 @@ export function createDemoApi(opts: DemoApiOptions = {}): TavroApi {
         connector_version: "demo",
         remote_control_allowed: false,
         last_seen_at: iso(startedAt),
+        provider_error_since: null,
         paired_at: iso(startedAt - 86_400_000),
         revoked_at: null,
         created_at: iso(startedAt - 86_400_000),
@@ -74,6 +84,7 @@ export function createDemoApi(opts: DemoApiOptions = {}): TavroApi {
         connector_version: "demo",
         remote_control_allowed: false,
         last_seen_at: iso(startedAt - 3 * 3_600_000),
+        provider_error_since: null,
         paired_at: iso(startedAt - 7 * 86_400_000),
         revoked_at: null,
         created_at: iso(startedAt - 7 * 86_400_000),
@@ -115,13 +126,21 @@ export function createDemoApi(opts: DemoApiOptions = {}): TavroApi {
     return (t - startedAt) % (onlineMs + offlineMs) < onlineMs;
   }
 
+  function sourceOk(t: number): boolean {
+    const phase = (t - startedAt) % (onlineMs + offlineMs);
+    return sourceOutageMs <= 0 || phase < sourceOutageAtMs || phase >= sourceOutageAtMs + sourceOutageMs;
+  }
+
   function sync(): void {
     const t = now();
     if (!hostOnline(t)) return; // connector "offline": no heartbeat, no updates
     const host = hosts.get(DEMO_HOST);
     if (!host || host.revoked_at) return;
-    hosts.set(DEMO_HOST, { ...host, last_seen_at: iso(t) });
+    const ok = sourceOk(t);
+    // Same rule as the host_heartbeat function: keep the start of an ongoing failure.
+    hosts.set(DEMO_HOST, { ...host, last_seen_at: iso(t), provider_error_since: ok ? null : (host.provider_error_since ?? iso(t)) });
     emit("hosts");
+    if (!ok) return; // source "not responding": heartbeat only, sessions untouched
 
     const observed = sim.observe();
     const transitions = diffObservations(known, observed, new Date(t));

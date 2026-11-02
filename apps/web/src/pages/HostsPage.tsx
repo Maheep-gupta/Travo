@@ -1,11 +1,11 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { PairingTicket } from "@mc/contracts";
-import { hostConnectivity, relativeTime } from "@mc/domain";
+import { hostConnectivity, hostSourceOk, relativeTime } from "@mc/domain";
 import { useApi } from "../api-context.js";
 import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, Notice, PageHeader, SessionListSkeleton } from "../components.js";
 import { useHosts, useNow } from "../hooks.js";
-import { IconCopy, IconHost } from "../icons.js";
+import { IconAlert, IconCopy, IconHost } from "../icons.js";
 
 export function HostsPage() {
   const api = useApi();
@@ -82,6 +82,11 @@ export function HostsPage() {
                     {api.kind === "demo" && <DemoTag />}
                     <ConnectivityBadge connectivity={c} />
                   </div>
+                  {c === "online" && !hostSourceOk(h) && (
+                    <p className="host-warning" role="note">
+                      <IconAlert /> Can't read its sessions since {relativeTime(h.provider_error_since, now)}. Their status may be out of date until it recovers.
+                    </p>
+                  )}
                   <dl className="facts">
                     <div>
                       <dt>Last seen</dt>

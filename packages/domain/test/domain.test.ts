@@ -6,6 +6,7 @@ import {
   displayStatus,
   effectiveCapabilities,
   hostConnectivity,
+  hostSourceOk,
   isLoopbackUrl,
   mapClaudeAgentsStatus,
   matchesFilter,
@@ -45,6 +46,12 @@ describe("host connectivity", () => {
     expect(displayStatus("waiting_for_input", "revoked")).toBe("disconnected");
     expect(displayStatus("ended", "disconnected")).toBe("ended");
     expect(displayStatus("running", "online")).toBe("running");
+    // Host reachable but its session source failing: never the stale stored status.
+    expect(displayStatus("running", "online", false)).toBe("source_unavailable");
+    expect(displayStatus("ended", "online", false)).toBe("ended");
+    expect(displayStatus("running", "disconnected", false)).toBe("disconnected");
+    expect(hostSourceOk({ provider_error_since: null })).toBe(true);
+    expect(hostSourceOk({ provider_error_since: "2026-10-29T12:00:00Z" })).toBe(false);
   });
 });
 
@@ -149,7 +156,9 @@ describe("schema compatibility", () => {
     expect(checkSchemaCompat(null)).toMatchObject({ ok: false, reason: "not_installed" });
     expect(checkSchemaCompat(0)).toMatchObject({ ok: false, reason: "too_old" });
     expect(checkSchemaCompat(99)).toMatchObject({ ok: false, reason: "too_new" });
-    expect(checkSchemaCompat(1)).toEqual({ ok: true });
+    // v2 (source health) is required: v1 lacks hosts.provider_error_since.
+    expect(checkSchemaCompat(1)).toMatchObject({ ok: false, reason: "too_old" });
+    expect(checkSchemaCompat(2)).toEqual({ ok: true });
   });
 });
 

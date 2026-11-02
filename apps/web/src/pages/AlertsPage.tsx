@@ -14,6 +14,8 @@ const KIND_TONE: Record<AlertKind, string> = {
   completed: "st-completed",
   host_disconnected: "st-disconnected",
   host_reconnected: "st-running",
+  source_unavailable: "st-source_unavailable",
+  source_recovered: "st-running",
 };
 
 export function AlertsPage() {

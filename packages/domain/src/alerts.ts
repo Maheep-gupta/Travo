@@ -15,7 +15,9 @@ export type AlertKind =
   | "failed"
   | "completed"
   | "host_disconnected"
-  | "host_reconnected";
+  | "host_reconnected"
+  | "source_unavailable"
+  | "source_recovered";
 
 export interface TavroAlert {
   /** Deterministic: the same underlying event always yields the same id. */
@@ -40,8 +42,15 @@ export const ALERT_LABEL: Record<AlertKind, string> = {
   completed: "Completed",
   host_disconnected: "Host disconnected",
   host_reconnected: "Host reconnected",
+  source_unavailable: "Session source not responding",
+  source_recovered: "Session source recovered",
 };
 
+/**
+ * Source-health alerts follow the host connectivity preferences: both mean
+ * "statuses from this machine can't be trusted right now" / "they can again",
+ * and reusing them avoids a notification_prefs schema change.
+ */
 const ALERT_PREF: Record<AlertKind, keyof NotificationPrefs> = {
   approval_required: "on_approval_required",
   waiting_for_input: "on_waiting_for_input",
@@ -49,6 +58,8 @@ const ALERT_PREF: Record<AlertKind, keyof NotificationPrefs> = {
   completed: "on_completed",
   host_disconnected: "on_host_disconnected",
   host_reconnected: "on_host_reconnected",
+  source_unavailable: "on_host_disconnected",
+  source_recovered: "on_host_reconnected",
 };
 
 export function alertAllowed(kind: AlertKind, prefs: NotificationPrefs): boolean {
@@ -72,6 +83,8 @@ export interface AlertHostInput {
   id: string;
   connectivity: HostConnectivity;
   last_seen_at: string | null;
+  /** Schema v2: null while the session source is healthy. */
+  provider_error_since: string | null;
   is_demo: boolean;
 }
 
@@ -80,6 +93,8 @@ export interface AlertSnapshot {
   /** Last status observed while the session's host was online (the last trusted status). */
   sessions: ReadonlyMap<string, SessionStatus>;
   hosts: ReadonlyMap<string, HostConnectivity>;
+  /** Source health per host, recorded only while the host was online (otherwise unknown). */
+  sources: ReadonlyMap<string, boolean>;
 }
 
 export interface AlertDetection {
@@ -98,6 +113,10 @@ export interface AlertDetection {
  *   host is back, and an unchanged status produces no alert.
  * - Hosts alert on online → disconnected and disconnected → online only. First
  *   connections and revocations are not attention events.
+ * - Session source health (e.g. the Claude CLI failing while the host still
+ *   heartbeats) alerts on ok → failing and failing → ok, judged only while the
+ *   host is online. Sessions behind a failing source are untrusted exactly
+ *   like sessions behind an offline host.
  */
 export function detectAlerts(
   previous: AlertSnapshot | null,
@@ -108,8 +127,30 @@ export function detectAlerts(
   const hostById = new Map(hosts.map((h) => [h.id, h]));
 
   const hostSnapshot = new Map<string, HostConnectivity>();
+  const sourceSnapshot = new Map<string, boolean>();
   for (const h of hosts) {
     hostSnapshot.set(h.id, h.connectivity);
+    if (h.connectivity === "online") {
+      const sourceOk = h.provider_error_since === null;
+      sourceSnapshot.set(h.id, sourceOk);
+      const sourceBefore = previous?.sources.get(h.id);
+      // "online" implies a heartbeat, so last_seen_at is set; a failing source has its start time.
+      const at = (sourceOk ? h.last_seen_at : h.provider_error_since) ?? h.last_seen_at;
+      if (previous && sourceBefore !== undefined && sourceBefore !== sourceOk && at) {
+        alerts.push({
+          id: `src:${h.id}:${sourceOk ? "ok" : "down"}:${at}`,
+          kind: sourceOk ? "source_recovered" : "source_unavailable",
+          sessionId: null,
+          hostId: h.id,
+          at,
+          isDemo: h.is_demo,
+        });
+      }
+    } else {
+      // Unknown while offline: keep what we last knew.
+      const known = previous?.sources.get(h.id);
+      if (known !== undefined) sourceSnapshot.set(h.id, known);
+    }
     const before = previous?.hosts.get(h.id);
     if (!previous || before === undefined || !h.last_seen_at) continue;
     if (before === "online" && h.connectivity === "disconnected") {
@@ -122,7 +163,8 @@ export function detectAlerts(
   const sessionSnapshot = new Map<string, SessionStatus>();
   for (const s of sessions) {
     const trustedBefore = previous?.sessions.get(s.id);
-    if (hostById.get(s.host_id)?.connectivity !== "online") {
+    const host = hostById.get(s.host_id);
+    if (host?.connectivity !== "online" || host.provider_error_since !== null) {
       // Untrusted right now: alert on nothing. Keep what we knew; a session we
       // have not seen yet is recorded with its stored status, so an unchanged
       // status is not mistaken for a new event once the host is back.
@@ -137,7 +179,7 @@ export function detectAlerts(
     alerts.push({ id: `s:${s.id}:${s.status}:${at}`, kind: s.status as AlertKind, sessionId: s.id, hostId: s.host_id, at, isDemo: s.is_demo });
   }
 
-  return { alerts, snapshot: { sessions: sessionSnapshot, hosts: hostSnapshot } };
+  return { alerts, snapshot: { sessions: sessionSnapshot, hosts: hostSnapshot, sources: sourceSnapshot } };
 }
 
 export const MAX_STORED_ALERTS = 50;
@@ -167,7 +209,7 @@ export function unreadCount(alerts: readonly StoredAlert[]): number {
 }
 
 const KINDS: ReadonlySet<string> = new Set(Object.keys(ALERT_LABEL));
-const HOST_KINDS: ReadonlySet<string> = new Set(["host_disconnected", "host_reconnected"]);
+const HOST_KINDS: ReadonlySet<string> = new Set(["host_disconnected", "host_reconnected", "source_unavailable", "source_recovered"]);
 /** Database ids are UUIDs; demo ids follow the same shape. Anything else is tampering. */
 const ID = /^[A-Za-z0-9-]{1,64}$/;
 
@@ -205,6 +247,8 @@ const NOTIFICATION_BODY: Record<AlertKind, string> = {
   completed: "A session reported that it is done.",
   host_disconnected: "A host stopped reporting. Its sessions may be out of date.",
   host_reconnected: "A host is reporting again.",
+  source_unavailable: "A host can't read its sessions right now. Their status may be out of date.",
+  source_recovered: "A host can read its sessions again.",
 };
 
 /** Names shown only when the user opted in on this device (D-013). */

@@ -21,6 +21,7 @@ const host = (id: string, lastSeenAgoMs: number | null): HostRow => ({
   connector_version: null,
   remote_control_allowed: false,
   last_seen_at: lastSeenAgoMs === null ? null : new Date(now.getTime() - lastSeenAgoMs).toISOString(),
+  provider_error_since: null,
   paired_at: null,
   revoked_at: null,
   created_at: now.toISOString(),
@@ -63,6 +64,16 @@ describe("buildSessionViews", () => {
       ["orphan", "disconnected"],
       ["on-running", "running"],
     ]);
+  });
+
+  it("never shows a stale stored status behind a host whose session source is failing", () => {
+    const failing = { ...host("failing", 1000), provider_error_since: new Date(now.getTime() - 60_000).toISOString() };
+    const views = buildSessionViews([session("a", "failing", "running"), session("b", "failing", "ended")], [failing], now);
+    expect(views.map((v) => [v.id, v.displayStatus])).toEqual([
+      ["a", "source_unavailable"],
+      ["b", "ended"],
+    ]);
+    expect(countByGroup(views).offline).toBe(1);
   });
 });
 

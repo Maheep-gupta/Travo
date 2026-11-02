@@ -101,7 +101,7 @@ export function createSupabaseApi(config: ConnectionConfig, storage: KeyValueSto
     async listHosts() {
       const { data, error } = await client
         .from("hosts")
-        .select("id, owner_id, name, platform, connector_version, remote_control_allowed, last_seen_at, paired_at, revoked_at, created_at")
+        .select("id, owner_id, name, platform, connector_version, remote_control_allowed, last_seen_at, provider_error_since, paired_at, revoked_at, created_at")
         .order("created_at");
       if (error) throw toApiError(error);
       return parseRows(HostRow, data);

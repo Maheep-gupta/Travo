@@ -3,7 +3,7 @@
 Owned by the product-manager role. Update this file after every unit of work (see `/tavro-ship`).
 Status: ✅ done and verified · 🟡 in progress · ⬜ planned · ⛔ blocked · 🔒 needs user approval.
 
-**Last updated:** 2026-10-30
+**Last updated:** 2026-11-02
 
 ## Product goal
 
@@ -11,20 +11,42 @@ Users can trust Tavro to tell them what their AI coding sessions are doing and w
 
 ## Next task
 
-**M4 trust gap: show "session source not responding" in the UI.** Since 2026-10-30 the connector keeps heartbeating while its provider fails, so the host shows as online and its sessions keep their **last known** status, which may be stale. The UI must say so. Acceptance criteria:
-- **Schema v2 migration:** add nullable `hosts.provider_error_since timestamptz`. The host can only set or clear it on its own row, extending the existing heartbeat grant and RLS policy, and it's never writable by the owner.
-- **Bump `MAX_SCHEMA_VERSION`.** Clients must still accept v1 and treat the missing field as null.
-- **Contracts and transport:** `HeartbeatInput` carries `provider_ok`; the connector sends it.
-- **Domain:** a session behind a host with a provider error displays as "unknown", with the reason "Session source on this host isn't responding". It is never shown as its stored status, and `detectAlerts` treats that host like an offline one for session alerts.
-- **Demo:** the demo backend simulates a provider outage so the state can be seen.
-- **Tests:** unit and component tests. Add RLS test cases to `supabase/tests`, written but **not run** (Docker), and say so.
+The requirements source is `docs/PRODUCT_SPEC.md`. Status for every requirement is in `docs/GAP_ANALYSIS.md`; the gap numbers (G#) below refer to it.
 
-**Done 2026-10-30:** the connector now tells provider failures apart from backend failures. That covers its state, logs and recovery message; no forced heartbeat; nothing marked ended. Verified by 3 connector tests.
+**Next cycle, as three parallel workstreams with separate file ownership:**
+1. **G2 and G3, auth isolation and expired sign-in** (one agent: `App.tsx`, `hooks.ts`, `alerts-context.tsx`, query keys, `supabase-api.ts` `toApiError`):
+   - every user-data query key includes the user id, and caches are cleared on any user change;
+   - `PGRST301`/401 map to `unauthorized`, which shows sign-in with a "session expired" notice;
+   - dom tests cover switching user A → B and token expiry.
+2. **G11, component and accessibility tests** (new `*.dom.test.tsx` files only, plus `vitest-axe`): Dashboard, SessionCard, SessionPage, Hosts, Setup and Sign-in. No accessibility violations in demo mode.
+3. **G6 and G8, dashboard counts, filters and sorting to spec, plus host detail** (main session: `view-model.ts`, `DashboardPage.tsx`, `domain/sessions.ts`, `HostsPage.tsx`, new `HostPage.tsx`, routes):
+   - one count per state, including Source unavailable;
+   - host and project filters;
+   - sort options with an id tie-break;
+   - a `/hosts/:id` page.
+
+After that: G4 (visible freshness), G5 (offline banner), G7, G10, G12.
+
+**Done 2026-11-02: G1 and G9, session source health (schema v2, D-014).**
+- `hosts.provider_error_since` is written only by the heartbeat.
+- The connector reports health immediately when it changes.
+- The new display state "Source not responding" replaces any stale stored status.
+- Source-unavailable and source-recovered alerts.
+- The host card and session page explain the state; the demo simulates an outage.
+
+Verified by unit and dom tests (170 total). The RLS cases (v2 heartbeat, no direct writes, cross-owner) are written but **not run** (Docker).
+
+Deviations from the planned acceptance criteria, both recorded in D-014:
+- Clients require v2 instead of also accepting v1, because no project ever applied v1.
+- The state is a dedicated "Source not responding" rather than "unknown", because the spec lists it as its own state.
+
+**Done 2026-11-02:** the Appearance setting (System / Dark / Light), with no flash of the wrong theme, 16 tests, and colour values unchanged. Follow-up: allow the inline theme script by its hash when a CSP is added.
 
 **Waiting on the user** (no work can proceed without them):
 - Choose a project licence.
 - Approve or decline `npm audit` (it's a network call).
 - Approve a push of the local commits.
+- Deployment and hosting for phone access (the core promise in spec 1.4 can't be met without it). See GAP_ANALYSIS for the full founder-decision list.
 - **Approve or reject D-013**, the session names in system notifications. The code is built and inactive behind `SESSION_NAMES_OPTION_APPROVED = false`.
 - Fix Docker, or approve a browser for testing, to unblock M4/M5 and visual QA.
 

@@ -1,11 +1,13 @@
 import type { SessionStatus } from "@mc/contracts";
 
 /**
- * What the UI shows. "disconnected" is never stored on a session: it is
- * derived when the session's host has stopped heartbeating, because in that
- * case the last stored status can no longer be trusted.
+ * What the UI shows. Two states are never stored on a session; both are
+ * derived because the last stored status can no longer be trusted:
+ * - "disconnected": the session's host has stopped heartbeating.
+ * - "source_unavailable": the host is reachable, but its session source
+ *   (e.g. the Claude Code CLI) is failing, so statuses are not being refreshed.
  */
-export type DisplayStatus = SessionStatus | "disconnected";
+export type DisplayStatus = SessionStatus | "disconnected" | "source_unavailable";
 
 export const STATUS_LABEL: Record<DisplayStatus, string> = {
   running: "Working",
@@ -15,6 +17,7 @@ export const STATUS_LABEL: Record<DisplayStatus, string> = {
   failed: "Failed",
   ended: "Ended",
   disconnected: "Disconnected",
+  source_unavailable: "Source not responding",
   unknown: "Unknown",
 };
 
@@ -24,10 +27,11 @@ const ATTENTION_RANK: Record<DisplayStatus, number> = {
   waiting_for_input: 1,
   failed: 2,
   disconnected: 3,
-  completed: 4,
-  running: 5,
-  unknown: 6,
-  ended: 7,
+  source_unavailable: 4,
+  completed: 5,
+  running: 6,
+  unknown: 7,
+  ended: 8,
 };
 
 export function attentionRank(status: DisplayStatus): number {

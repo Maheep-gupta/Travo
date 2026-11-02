@@ -52,6 +52,8 @@ export class Connector {
   private lastHeartbeat = 0;
   private offlineSince: Date | null = null;
   private providerFailingSince: Date | null = null;
+  /** Source health as last reported to the backend; null = not reported yet. */
+  private reportedProviderOk: boolean | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
   private readonly pollMs: number;
@@ -101,8 +103,9 @@ export class Connector {
         this.log(`offline: ${(e as Error).message}`);
       }
       this.state = "offline";
-      // Force a heartbeat as soon as we are back.
+      // Force a heartbeat (and a fresh health report) as soon as we are back.
       this.lastHeartbeat = 0;
+      this.reportedProviderOk = null;
       return backoffDelay(this.failures, this.pollMs);
     }
   }
@@ -114,22 +117,30 @@ export class Connector {
       this.loadedKnown = true;
     }
 
-    if (now.getTime() - this.lastHeartbeat >= HEARTBEAT_INTERVAL_MS) {
-      await transport.heartbeat({
-        platform: this.opts.platform,
-        connector_version: this.opts.version,
-        remote_control_allowed: this.opts.remoteControlAllowed,
-      });
-      this.lastHeartbeat = now.getTime();
-    }
-
-    let observed: Awaited<ReturnType<Provider["poll"]>>;
+    // Read the source first so the heartbeat can report its health.
+    let observed: Awaited<ReturnType<Provider["poll"]>> = [];
+    let providerError: ProviderError | null = null;
     try {
       observed = await provider.poll();
     } catch (e) {
       // Provider errors are already sanitised (no command output); keep only the message.
-      throw new ProviderError(`${provider.id}: ${e instanceof Error ? e.message : "unknown error"}`);
+      providerError = new ProviderError(`${provider.id}: ${e instanceof Error ? e.message : "unknown error"}`);
     }
+
+    // Heartbeat on schedule, and immediately when source health changes, so the
+    // dashboard stops trusting (or trusts again) this host's statuses within a cycle.
+    const providerOk = providerError === null;
+    if (now.getTime() - this.lastHeartbeat >= HEARTBEAT_INTERVAL_MS || providerOk !== this.reportedProviderOk) {
+      await transport.heartbeat({
+        platform: this.opts.platform,
+        connector_version: this.opts.version,
+        remote_control_allowed: this.opts.remoteControlAllowed,
+        provider_ok: providerOk,
+      });
+      this.lastHeartbeat = now.getTime();
+      this.reportedProviderOk = providerOk;
+    }
+    if (providerError) throw providerError;
     const previous = new Map<string, SessionStatus>([...this.known].map(([k, v]) => [k, v.status]));
     const transitions = diffObservations(previous, observed, now);
     const capabilities = effectiveCapabilities(provider.id, {

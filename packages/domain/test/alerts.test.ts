@@ -22,6 +22,7 @@ const host = (over: Partial<AlertHostInput> = {}): AlertHostInput => ({
   id: HOST,
   connectivity: "online",
   last_seen_at: "2026-10-29T12:00:00.000Z",
+  provider_error_since: null,
   is_demo: false,
   ...over,
 });
@@ -155,6 +156,58 @@ describe("detectAlerts", () => {
       { sessions: [], hosts: [host({ connectivity: "disconnected" })] },
     ]);
     expect(a).toMatchObject({ id: "h:h1:disconnected:2026-10-29T12:00:00.000Z", kind: "host_disconnected", sessionId: null, at: "2026-10-29T12:00:00.000Z" });
+  });
+
+  describe("session source health", () => {
+    const failing = (over: Partial<AlertHostInput> = {}) => host({ provider_error_since: "2026-10-29T12:01:00.000Z", last_seen_at: "2026-10-29T12:01:30.000Z", ...over });
+
+    it("alerts once when the source stops and once when it recovers", () => {
+      const alerts = run([
+        { sessions: [], hosts: [host()] },
+        { sessions: [], hosts: [failing()] },
+        { sessions: [], hosts: [failing({ last_seen_at: "2026-10-29T12:02:00.000Z" })] },
+        { sessions: [], hosts: [host({ last_seen_at: "2026-10-29T12:03:00.000Z" })] },
+      ]);
+      expect(alerts.map((a) => [a.kind, a.id, a.sessionId])).toEqual([
+        ["source_unavailable", "src:h1:down:2026-10-29T12:01:00.000Z", null],
+        ["source_recovered", "src:h1:ok:2026-10-29T12:03:00.000Z", null],
+      ]);
+    });
+
+    it("never alerts on sessions while the source is failing, and does not mistake a stale status for news", () => {
+      const alerts = run([
+        { sessions: [session({ status: "running" })], hosts: [host()] },
+        // The stored status changes while the source is down: untrusted, no alert.
+        { sessions: [session({ status: "completed" })], hosts: [failing()] },
+        // Recovery with a genuinely changed status: alert once, after the source alert.
+        { sessions: [session({ status: "completed" })], hosts: [host({ last_seen_at: "2026-10-29T12:03:00.000Z" })] },
+      ]);
+      expect(alerts.map((a) => a.kind)).toEqual(["source_unavailable", "source_recovered", "completed"]);
+    });
+
+    it("does not judge source health while the host is offline, and remembers it", () => {
+      const alerts = run([
+        { sessions: [], hosts: [host()] },
+        { sessions: [], hosts: [failing({ connectivity: "disconnected" })] },
+        { sessions: [], hosts: [host({ last_seen_at: "2026-10-29T12:05:00.000Z" })] },
+      ]);
+      expect(alerts.map((a) => a.kind)).toEqual(["host_disconnected", "host_reconnected"]);
+    });
+
+    it("treats a source already failing at baseline as known", () => {
+      expect(run([{ sessions: [], hosts: [failing()] }, { sessions: [], hosts: [failing()] }])).toEqual([]);
+    });
+
+    it("maps source alerts to the host connectivity preferences", () => {
+      const prefs = { on_waiting_for_input: true, on_approval_required: true, on_completed: true, on_failed: true, on_host_disconnected: false, on_host_reconnected: true };
+      expect(alertAllowed("source_unavailable", prefs)).toBe(false);
+      expect(alertAllowed("source_recovered", prefs)).toBe(true);
+    });
+
+    it("keeps stored source alerts valid as host alerts", () => {
+      const stored = { id: "src:h1:down:2026-10-29T12:01:00.000Z", kind: "source_unavailable", sessionId: null, hostId: "h1", at: "2026-10-29T12:01:00.000Z", isDemo: false, read: false };
+      expect(parseStoredAlerts([stored, { ...stored, id: "x", sessionId: "s1" }]).map((a) => a.id)).toEqual([stored.id]);
+    });
   });
 
   it("forgets sessions that disappear", () => {

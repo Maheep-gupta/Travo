@@ -86,8 +86,8 @@ export function SessionPage() {
   const available = ALL_CAPABILITIES.filter((c) => hasCapability(session.capabilities, c));
   const unavailable = ALL_CAPABILITIES.filter((c) => !hasCapability(session.capabilities, c));
   const canReply = hasCapability(session.capabilities, "send_message");
-  const reasonText =
-    session.displayStatus === "disconnected" ? null : session.status_reason;
+  const untrusted = session.displayStatus === "disconnected" || session.displayStatus === "source_unavailable";
+  const reasonText = untrusted ? null : session.status_reason;
 
   return (
     <main className="page">
@@ -118,7 +118,12 @@ export function SessionPage() {
             {provider.label}
           </span>
         </div>
-        {session.displayStatus === "disconnected" ? (
+        {session.displayStatus === "source_unavailable" ? (
+          <p className="reason">
+            <strong>{session.hostName} is online but can't read its sessions right now,</strong> so this state may be out of date. Last reported:{" "}
+            {STATUS_LABEL[session.status]}.
+          </p>
+        ) : session.displayStatus === "disconnected" ? (
           <p className="reason">
             <strong>{session.hostName} has stopped reporting,</strong> so this session's current state is unknown. Last reported:{" "}
             {STATUS_LABEL[session.status]}.

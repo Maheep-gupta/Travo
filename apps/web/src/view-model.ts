@@ -1,5 +1,5 @@
 import type { HostRow, ProviderId, SessionRow } from "@mc/contracts";
-import { PROVIDERS, compareByAttention, displayStatus, hostConnectivity, type DisplayStatus, type HostConnectivity } from "@mc/domain";
+import { PROVIDERS, compareByAttention, displayStatus, hostConnectivity, hostSourceOk, type DisplayStatus, type HostConnectivity } from "@mc/domain";
 
 export interface SessionView extends SessionRow {
   displayStatus: DisplayStatus;
@@ -16,7 +16,7 @@ export function buildSessionViews(sessions: readonly SessionRow[], hosts: readon
       const connectivity: HostConnectivity = host ? hostConnectivity(host, now) : "disconnected";
       return {
         ...s,
-        displayStatus: displayStatus(s.status, connectivity),
+        displayStatus: displayStatus(s.status, connectivity, host ? hostSourceOk(host) : true),
         hostName: host?.name ?? "Unknown host",
         hostConnectivity: connectivity,
       };
@@ -31,7 +31,7 @@ export const STATUS_GROUPS: Record<StatusGroup, { label: string; statuses: Displ
   attention: { label: "Need you", statuses: ["approval_required", "waiting_for_input", "failed"] },
   working: { label: "Working", statuses: ["running"] },
   done: { label: "Done", statuses: ["completed", "ended"] },
-  offline: { label: "Offline / unknown", statuses: ["disconnected", "unknown"] },
+  offline: { label: "Offline / unavailable", statuses: ["disconnected", "source_unavailable", "unknown"] },
 };
 
 export function isStatusGroup(value: string | null): value is StatusGroup {

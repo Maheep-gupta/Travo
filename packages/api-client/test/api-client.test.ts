@@ -50,6 +50,24 @@ describe("demo api", () => {
     expect(after?.last_seen_at).toBe(new Date(t).toISOString());
   });
 
+  it("simulates a session-source outage: heartbeats continue, sessions freeze, failure start is kept", async () => {
+    let t = Date.parse("2026-10-29T12:00:00Z");
+    const api = createDemoApi({ tickMs: 0, onlineMs: 10 * 60_000, offlineMs: 60_000, sourceOutageAtMs: 60_000, sourceOutageMs: 60_000, now: () => t });
+    const laptop = async () => (await api.listHosts()).find((h) => h.name === "Demo laptop");
+    expect((await laptop())?.provider_error_since).toBeNull();
+    t += 70_000; // outage began at +60s; this sync is the first to see it
+    const started = (await laptop())?.provider_error_since;
+    expect(started).toBe(new Date(t).toISOString());
+    const frozen = (await api.listSessions()).map((s) => s.updated_at);
+    t += 20_000;
+    const during = await laptop();
+    expect(during?.last_seen_at).toBe(new Date(t).toISOString()); // still heartbeating
+    expect(during?.provider_error_since).toBe(started); // ongoing failure keeps its start
+    expect((await api.listSessions()).map((s) => s.updated_at)).toEqual(frozen);
+    t += 40_000; // outage over
+    expect((await laptop())?.provider_error_since).toBeNull();
+  });
+
   it("refuses pairing in demo mode and requires sign-in", async () => {
     const api = createDemoApi({ tickMs: 0 });
     await expect(api.createHostPairing("x")).rejects.toThrow(/demo mode/);

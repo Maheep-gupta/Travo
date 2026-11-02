@@ -7,8 +7,8 @@ import type { NotificationPrefs } from "./preferences.js";
  * refuse to run against a project whose public.app_meta.schema_version is
  * outside [MIN_SCHEMA_VERSION, MAX_SCHEMA_VERSION].
  */
-export const MIN_SCHEMA_VERSION = 1;
-export const MAX_SCHEMA_VERSION = 1;
+export const MIN_SCHEMA_VERSION = 2;
+export const MAX_SCHEMA_VERSION = 2;
 
 export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
   on_waiting_for_input: true,

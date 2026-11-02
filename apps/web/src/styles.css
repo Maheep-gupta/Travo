@@ -69,42 +69,118 @@
   line-height: 1.5;
 }
 
+/* Light palette: the single source of truth for light values. Inert on its
+   own; the two rules below map it onto the live tokens. */
+:root {
+  --light-bg: #f5f2eb;
+  --light-surface: #fffdf8;
+  --light-surface-2: #f8f4ec;
+  --light-surface-3: #efe9de;
+  --light-line: #e3dccf;
+  --light-line-strong: #d3cabb;
+  --light-text: #1d201d;
+  --light-text-2: #3b3f3a;
+  --light-muted: #555b53;
+  --light-faint: #646961;
+  --light-accent: #ae4924;
+  --light-accent-hover: #a04626;
+  --light-accent-ink: #fffaf5;
+  --light-accent-soft: rgba(184, 83, 46, 0.1);
+  /* Status fg tuned for >= 4.5:1 on its own tint over --bg (WCAG AA). */
+  --light-st-working: #19734b;
+  --light-st-working-bg: rgba(31, 122, 82, 0.1);
+  --light-st-approval: #8c5a07;
+  --light-st-approval-bg: rgba(196, 135, 20, 0.14);
+  --light-st-waiting: #2e5fb3;
+  --light-st-waiting-bg: rgba(46, 95, 179, 0.1);
+  --light-st-failed: #b3322a;
+  --light-st-failed-bg: rgba(179, 50, 42, 0.09);
+  --light-st-done: #5f655d;
+  --light-st-done-bg: rgba(95, 101, 93, 0.1);
+  --light-st-offline: #6249b0;
+  --light-st-offline-bg: rgba(98, 73, 176, 0.1);
+  --light-st-neutral: #61675e;
+  --light-st-neutral-bg: rgba(107, 113, 104, 0.1);
+  --light-demo: #7a6418;
+  --light-shadow-1: 0 1px 2px rgba(60, 50, 30, 0.06);
+  --light-shadow-2: 0 12px 32px rgba(60, 50, 30, 0.12);
+}
+
+/* Appearance (Settings). No data-theme = System: follow the OS. An explicit
+   choice sets data-theme="dark"|"light" on <html> (src/theme.ts, plus the
+   inline script in index.html so it applies before first paint). Dark stays the
+   default above; the light mapping is listed once per trigger because a media
+   query cannot share a selector with an attribute. */
 @media (prefers-color-scheme: light) {
-  :root {
-    --bg: #f5f2eb;
-    --surface: #fffdf8;
-    --surface-2: #f8f4ec;
-    --surface-3: #efe9de;
-    --line: #e3dccf;
-    --line-strong: #d3cabb;
-    --text: #1d201d;
-    --text-2: #3b3f3a;
-    --muted: #555b53;
-    --faint: #646961;
-    --accent: #ae4924;
-    --accent-hover: #a04626;
-    --accent-ink: #fffaf5;
-    --accent-soft: rgba(184, 83, 46, 0.1);
-    /* Status fg tuned for >= 4.5:1 on its own tint over --bg (WCAG AA). */
-    --st-working: #19734b;
-    --st-working-bg: rgba(31, 122, 82, 0.1);
-    --st-approval: #8c5a07;
-    --st-approval-bg: rgba(196, 135, 20, 0.14);
-    --st-waiting: #2e5fb3;
-    --st-waiting-bg: rgba(46, 95, 179, 0.1);
-    --st-failed: #b3322a;
-    --st-failed-bg: rgba(179, 50, 42, 0.09);
-    --st-done: #5f655d;
-    --st-done-bg: rgba(95, 101, 93, 0.1);
-    --st-offline: #6249b0;
-    --st-offline-bg: rgba(98, 73, 176, 0.1);
-    --st-neutral: #61675e;
-    --st-neutral-bg: rgba(107, 113, 104, 0.1);
-    --demo: #7a6418;
-    --shadow-1: 0 1px 2px rgba(60, 50, 30, 0.06);
-    --shadow-2: 0 12px 32px rgba(60, 50, 30, 0.12);
+  :root:not([data-theme="dark"]) {
+    --bg: var(--light-bg);
+    --surface: var(--light-surface);
+    --surface-2: var(--light-surface-2);
+    --surface-3: var(--light-surface-3);
+    --line: var(--light-line);
+    --line-strong: var(--light-line-strong);
+    --text: var(--light-text);
+    --text-2: var(--light-text-2);
+    --muted: var(--light-muted);
+    --faint: var(--light-faint);
+    --accent: var(--light-accent);
+    --accent-hover: var(--light-accent-hover);
+    --accent-ink: var(--light-accent-ink);
+    --accent-soft: var(--light-accent-soft);
+    --st-working: var(--light-st-working);
+    --st-working-bg: var(--light-st-working-bg);
+    --st-approval: var(--light-st-approval);
+    --st-approval-bg: var(--light-st-approval-bg);
+    --st-waiting: var(--light-st-waiting);
+    --st-waiting-bg: var(--light-st-waiting-bg);
+    --st-failed: var(--light-st-failed);
+    --st-failed-bg: var(--light-st-failed-bg);
+    --st-done: var(--light-st-done);
+    --st-done-bg: var(--light-st-done-bg);
+    --st-offline: var(--light-st-offline);
+    --st-offline-bg: var(--light-st-offline-bg);
+    --st-neutral: var(--light-st-neutral);
+    --st-neutral-bg: var(--light-st-neutral-bg);
+    --demo: var(--light-demo);
+    --shadow-1: var(--light-shadow-1);
+    --shadow-2: var(--light-shadow-2);
     color-scheme: light;
   }
+}
+
+:root[data-theme="light"] {
+  --bg: var(--light-bg);
+  --surface: var(--light-surface);
+  --surface-2: var(--light-surface-2);
+  --surface-3: var(--light-surface-3);
+  --line: var(--light-line);
+  --line-strong: var(--light-line-strong);
+  --text: var(--light-text);
+  --text-2: var(--light-text-2);
+  --muted: var(--light-muted);
+  --faint: var(--light-faint);
+  --accent: var(--light-accent);
+  --accent-hover: var(--light-accent-hover);
+  --accent-ink: var(--light-accent-ink);
+  --accent-soft: var(--light-accent-soft);
+  --st-working: var(--light-st-working);
+  --st-working-bg: var(--light-st-working-bg);
+  --st-approval: var(--light-st-approval);
+  --st-approval-bg: var(--light-st-approval-bg);
+  --st-waiting: var(--light-st-waiting);
+  --st-waiting-bg: var(--light-st-waiting-bg);
+  --st-failed: var(--light-st-failed);
+  --st-failed-bg: var(--light-st-failed-bg);
+  --st-done: var(--light-st-done);
+  --st-done-bg: var(--light-st-done-bg);
+  --st-offline: var(--light-st-offline);
+  --st-offline-bg: var(--light-st-offline-bg);
+  --st-neutral: var(--light-st-neutral);
+  --st-neutral-bg: var(--light-st-neutral-bg);
+  --demo: var(--light-demo);
+  --shadow-1: var(--light-shadow-1);
+  --shadow-2: var(--light-shadow-2);
+  color-scheme: light;
 }
 
 /* ---------- Base ---------- */
@@ -257,7 +333,9 @@ code, kbd, .mono { font-family: var(--mono); }
 .st-completed { --c: var(--st-done); --cbg: var(--st-done-bg); }
 .st-ended, .st-unknown { --c: var(--st-neutral); --cbg: var(--st-neutral-bg); }
 .st-disconnected { --c: var(--st-offline); --cbg: var(--st-offline-bg); }
-.st-disconnected .dot, .st-unknown .dot, .st-ended .dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c); }
+/* Host reachable, session source failing: a warning tone, hollow dot = "not live". */
+.st-source_unavailable { --c: var(--st-approval); --cbg: var(--st-approval-bg); }
+.st-disconnected .dot, .st-source_unavailable .dot, .st-unknown .dot, .st-ended .dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c); }
 @media (prefers-reduced-motion: no-preference) {
   .st-running .dot { animation: pulse 2.2s ease-in-out infinite; }
 }
@@ -428,6 +506,8 @@ a.env-pill:hover { background: var(--surface-2); }
 .host-card { display: grid; gap: var(--sp-3); }
 .host-card .head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); }
 .host-card .head svg { width: 22px; height: 22px; color: var(--muted); flex: none; }
+.host-warning { display: flex; gap: var(--sp-2); align-items: flex-start; margin: 0; font-size: 0.88rem; color: var(--st-approval); }
+.host-warning svg { width: 18px; height: 18px; flex: none; margin-top: 1px; }
 .host-card .head h3 { flex: 1 1 8rem; min-width: 0; overflow-wrap: anywhere; }
 .host-card .head .conn { margin-left: auto; }
 .host-card .facts > div { grid-template-columns: 96px minmax(0, 1fr); }

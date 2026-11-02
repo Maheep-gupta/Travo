@@ -69,6 +69,13 @@
 
 **Demo data:** every simulated session, event and message is flagged `is_demo` and labelled DEMO in the UI.
 
+**Session source health (schema v2, 2026-11-02):**
+- `hosts.provider_error_since` is written **only** by the security-definer `host_heartbeat(…, p_provider_ok)` for the caller's own active host.
+- No role has a column UPDATE grant for it, and a null health value is rejected.
+- Owners read it like any other column on their own hosts.
+- The UI never shows a stored session status as current while it is set.
+- Test cases are in `supabase/tests/rls.test.ts`, **written, not yet run** (Docker).
+
 ## Known gaps and risks
 
 1. **RLS unverified** until Docker works. This is the gate for enabling real data.

@@ -121,8 +121,9 @@ describe("Connector", () => {
     expect(connector.connectionState).toBe("provider_error");
     expect(logs.filter((l) => l.startsWith("provider error: mock: claude agents --json timed out."))).toHaveLength(1);
     expect(logs.some((l) => l.startsWith("offline"))).toBe(false);
-    // Heartbeats keep the host online on their normal schedule (t=0, 30s, 60s).
-    expect(transport.heartbeats).toHaveLength(3);
+    // Health is reported at once when it changes (t=15s), then on the normal schedule (t=45s),
+    // so the host stays online while the dashboard stops trusting its statuses.
+    expect(transport.heartbeats.map((h) => h.provider_ok)).toEqual([true, false, false]);
     // A failed read is not "no sessions": nothing is ended.
     expect(transport.events.filter((e) => e.type === "session_ended")).toHaveLength(0);
     expect(transport.sessions.get("mock:a")?.status).toBe("running");
@@ -133,6 +134,8 @@ describe("Connector", () => {
     expect(await connector.runOnce()).toBe(1000);
     expect(connector.connectionState).toBe("online");
     expect(logs.at(-1)).toMatch(/^provider recovered: mock after \d+s$/);
+    // Recovery is reported immediately, not at the next scheduled heartbeat.
+    expect(transport.heartbeats.at(-1)?.provider_ok).toBe(true);
     expect(transport.events.map((e) => `${e.type}:${e.status}`)).toEqual(["session_discovered:running", "status_changed:waiting_for_input"]);
   });
 

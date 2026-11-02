@@ -8,6 +8,7 @@ import { MemoryRouter, Route, Routes, useParams } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthUser, ChangeTopic, TavroApi } from "@mc/api-client/demo";
 import type { HostRow, NotificationPrefs, PairingTicket, SessionEventRow, SessionMessageRow, SessionRow, SessionStatus } from "@mc/contracts";
+import { MAX_SCHEMA_VERSION } from "@mc/contracts/constants";
 import type { TavroAlert } from "@mc/domain";
 import { AlertStore, alertStorageKey } from "./alert-store.js";
 import { AlertsProvider, useAlerts } from "./alerts-context.js";
@@ -65,7 +66,7 @@ class FakeApi implements TavroApi {
   private readonly authListeners = new Set<(user: AuthUser | null) => void>();
 
   getSchemaVersion(): Promise<number | null> {
-    return Promise.resolve(1);
+    return Promise.resolve(MAX_SCHEMA_VERSION);
   }
   getUser(): Promise<AuthUser | null> {
     return Promise.resolve(USER);
@@ -100,7 +101,7 @@ class FakeApi implements TavroApi {
     // Seen just now, so the host counts as online whenever the list is fetched.
     const now = new Date().toISOString();
     return Promise.resolve([
-      { id: HOST, owner_id: USER.id, name: "Test laptop", platform: "simulated", connector_version: "test", remote_control_allowed: false, last_seen_at: now, paired_at: T0, revoked_at: null, created_at: T0 },
+      { id: HOST, owner_id: USER.id, name: "Test laptop", platform: "simulated", connector_version: "test", remote_control_allowed: false, last_seen_at: now, provider_error_since: null, paired_at: T0, revoked_at: null, created_at: T0 },
     ]);
   }
   createHostPairing(): Promise<PairingTicket> {
