@@ -35,6 +35,11 @@ export default tseslint.config(
     languageOptions: { sourceType: "script", globals: { ...globals.browser } },
   },
   {
+    // Classic scripts served as-is from public/ (e.g. the pre-paint theme script).
+    files: ["apps/web/public/**/*.js"],
+    languageOptions: { sourceType: "script", globals: { ...globals.browser } },
+  },
+  {
     // Shared packages must stay platform-neutral (web, React Native, Deno, Node).
     // Their tsconfigs include Node types only so tests compile; these rules keep
     // Node and DOM APIs out of the source.

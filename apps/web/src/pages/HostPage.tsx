@@ -1,11 +1,12 @@
 import { Link, useParams } from "react-router";
 import type { HostRow } from "@mc/contracts";
-import { hostConnectivity, hostSourceOk, relativeTime, type HostConnectivity } from "@mc/domain";
+import { hostSourceOk, relativeTime, type HostConnectivity } from "@mc/domain";
 import { useApi } from "../api-context.js";
 import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, SessionListSkeleton } from "../components.js";
-import { useHosts, useNow, useSessionViews } from "../hooks.js";
+import { useConnection, useHosts, useNow, useSessionViews } from "../hooks.js";
 import { IconAlert, IconArrowLeft, IconHost } from "../icons.js";
-import { SessionSection } from "./DashboardPage.js";
+import { buildHostView } from "../view-model.js";
+import { FreshnessNote, SessionSection } from "./DashboardPage.js";
 
 function formatTime(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString() : "—";
@@ -18,6 +19,7 @@ export function HostPage() {
   const now = useNow();
   const hosts = useHosts();
   const sessions = useSessionViews();
+  const sync = useConnection(now).kind;
   const host = hosts.data?.find((h) => h.id === id);
 
   // Every state keeps a page-level h1 (visually hidden where the design has none).
@@ -51,7 +53,7 @@ export function HostPage() {
     );
   }
 
-  const connectivity = hostConnectivity(host, now);
+  const { connectivity, freshness } = buildHostView(host, now, { sync, fetchedAt: hosts.dataUpdatedAt });
   const own = (sessions.data ?? []).filter((s) => s.host_id === host.id);
 
   return (
@@ -77,11 +79,21 @@ export function HostPage() {
           <dl className="facts">
             <div>
               <dt>Connection</dt>
-              <dd>{CONNECTION_TEXT[connectivity]}</dd>
+              <dd>
+                {CONNECTION_TEXT[connectivity]}
+                {/* Judged at the last refresh while Tavro can't refresh; never presented as now. */}
+                {sync !== "current" && <> (as of Tavro's last refresh)</>}
+              </dd>
             </div>
             <div>
               <dt>Last heartbeat</dt>
               <dd title={host.last_seen_at ? formatTime(host.last_seen_at) : undefined}>{relativeTime(host.last_seen_at, now)}</dd>
+            </div>
+            <div>
+              <dt>Last update</dt>
+              <dd>
+                <FreshnessNote freshness={freshness} now={now} withReason />
+              </dd>
             </div>
             <div>
               <dt>Session source</dt>

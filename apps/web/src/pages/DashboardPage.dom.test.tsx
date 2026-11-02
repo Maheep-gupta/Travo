@@ -162,3 +162,21 @@ describe("DashboardPage", () => {
     expect((screen.getByRole("combobox", { name: "Host" }) as HTMLSelectElement).value).toBe("");
   });
 });
+
+describe("DashboardPage freshness (G4)", () => {
+  const card = (title: string) => [...document.querySelectorAll<HTMLElement>(".session-card")].find((c) => c.querySelector(".sc-title")?.textContent === title) as HTMLElement;
+
+  it("shows when each card's data was last read, separately from last activity, and marks stale data in text", async () => {
+    await renderDashboard();
+    const live = card("Refactor auth middleware");
+    expect(within(live).getByText("Updated just now")).toBeTruthy();
+    expect(within(live).queryByText("Stale")).toBeNull();
+    // Last activity stays in its own, labelled slot.
+    expect(live.querySelector(".sc-time")?.textContent).toMatch(/^Last activity /);
+
+    const offline = card("Nightly data import");
+    const fresh = offline.querySelector(".fresh") as HTMLElement;
+    expect(fresh.textContent).toMatch(/^Updated \d+h ago, Stale$/);
+    expect(within(offline).getByText("Stale")).toBeTruthy();
+  });
+});

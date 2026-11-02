@@ -57,7 +57,12 @@ export const SessionRow = z.object({
 });
 export type SessionRow = z.infer<typeof SessionRow>;
 
-/** What a connector reports about a session; ownership is set server-side. */
+/**
+ * What a connector reports about a session; ownership is set server-side.
+ * `observed_at` (schema v3) is when the connector observed these values: the
+ * database keeps the newest observation and silently skips older writes.
+ * It is not in SessionRow because clients have no use for it.
+ */
 export const SessionUpsert = SessionRow.pick({
   provider: true,
   external_id: true,
@@ -72,7 +77,7 @@ export const SessionUpsert = SessionRow.pick({
   is_demo: true,
   started_at: true,
   ended_at: true,
-});
+}).extend({ observed_at: isoTimestamp });
 export type SessionUpsert = z.infer<typeof SessionUpsert>;
 
 export const SessionEventType = z.enum([

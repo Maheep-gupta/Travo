@@ -5,10 +5,12 @@ import { ApiError, type AuthUser } from "@mc/api-client/demo";
 import { checkSchemaCompat, unreadCount } from "@mc/domain";
 import { AlertsProvider, useAlerts } from "./alerts-context.js";
 import "./alerts.css";
+import "./shell.css";
 import { useApi, useApiContext, useLiveUpdates } from "./api-context.js";
 import { ErrorState, Notice, Spinner } from "./components.js";
 import { clearUserData } from "./hooks.js";
 import { BrandMark, IconBell, IconHost, IconSessions, IconSettings } from "./icons.js";
+import { OfflineBanner } from "./offline-banner.js";
 import { PageErrorBoundary, retryableLazy } from "./page-loading.js";
 import { BASE_TITLE, titleWithUnread, updateAppBadge } from "./unread-indicator.js";
 import { DashboardPage } from "./pages/DashboardPage.js";
@@ -272,6 +274,7 @@ function Shell() {
           </div>
         </div>
       </header>
+      <OfflineBanner />
       <div id="main" tabIndex={-1} className="main-focus">
         <PageErrorBoundary resetKey={pathname}>
           <Suspense fallback={<Spinner />}>

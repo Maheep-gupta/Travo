@@ -1,6 +1,7 @@
 // Component tests for Settings (spec 5, 12, 13.3, 18.2): alert preference
 // save / discard / failure, every system-notification permission state with a
-// stubbed Notification API, the Appearance radios, and an axe smoke check.
+// stubbed Notification API, the Appearance radios, the Account, Privacy,
+// Integrations and Application sections (spec 10.2, 12, 14.1), and axe checks.
 import { ApiError } from "@mc/api-client/demo";
 import { useEffect, useState, type ReactNode } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -13,6 +14,7 @@ import type { NotificationPrefs } from "@mc/contracts";
 import { DEFAULT_NOTIFICATION_PREFS } from "@mc/contracts/constants";
 import { AlertsProvider } from "../alerts-context.js";
 import { ApiProvider, useApiContext } from "../api-context.js";
+import { APP_VERSION } from "../app-info.js";
 import { THEME_STORAGE_KEY } from "../theme.js";
 import { SettingsPage } from "./SettingsPage.js";
 
@@ -373,5 +375,140 @@ describe("Settings: accessibility", () => {
     expect(await axe(container)).toHaveNoViolations();
     fireEvent.click(toggle("Completed"));
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("has no axe violations with the clear-data confirmation open", async () => {
+    const { container } = await renderSettings();
+    await prefsLoaded();
+    fireEvent.click(within(section("Privacy & data")).getByRole("button", { name: "Clear this account's data on this device…" }));
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+function section(name: string): HTMLElement {
+  return screen.getByRole("region", { name });
+}
+
+describe("Settings: account", () => {
+  it("shows the demo account and backend, with Change backend but no dead Sign out", async () => {
+    await renderSettings();
+    const card = section("Account");
+    expect(within(card).getByText("Demo user, no sign-in needed")).toBeTruthy();
+    expect(within(card).getByText("Demo, in this browser only")).toBeTruthy();
+    expect(within(card).queryByRole("button", { name: "Sign out" })).toBeNull();
+    expect(within(card).getByRole("button", { name: "Change backend" })).toBeTruthy();
+  });
+
+  it("shows the signed-in email for a Supabase account and signs out", async () => {
+    const signOut = vi.fn(() => Promise.resolve());
+    backend.api = { ...demo, kind: "supabase", getUser: () => demo.getUser().then((u) => u && { ...u, email: "dev@example.com" }), signOut };
+    await renderSettings();
+    const card = section("Account");
+    expect(await within(card).findByText("dev@example.com")).toBeTruthy();
+    expect(within(card).getByText("Your own Supabase project")).toBeTruthy();
+    fireEvent.click(within(card).getByRole("button", { name: "Sign out" }));
+    await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1));
+  });
+
+  it("says so when signing out fails, and lets the user retry", async () => {
+    backend.api = { ...demo, kind: "supabase", signOut: () => Promise.reject(new Error("network")) };
+    await renderSettings();
+    const card = section("Account");
+    fireEvent.click(within(card).getByRole("button", { name: "Sign out" }));
+    expect((await within(card).findByRole("alert")).textContent).toContain("Couldn't sign out");
+    expect((within(card).getByRole("button", { name: "Sign out" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe("Settings: privacy and data", () => {
+  const clearButton = (card: HTMLElement) => within(card).getByRole("button", { name: "Clear this account's data on this device…" });
+
+  it("lists what is stored where, for demo mode", async () => {
+    await renderSettings();
+    const text = section("Privacy & data").textContent ?? "";
+    expect(text).toContain("no servers of its own and no analytics");
+    expect(text).toContain("generated in this tab's memory");
+    expect(text).toContain("ids, kinds, times and read state. No names or session text.");
+    expect(text).toContain("Transcript text is never sent to a remote project");
+    expect(text).toContain("without session or host names and without any transcript text");
+  });
+
+  it("describes the user's own Supabase project when connected", async () => {
+    backend.api = { ...demo, kind: "supabase" };
+    await renderSettings();
+    const text = section("Privacy & data").textContent ?? "";
+    expect(text).toContain("stored in your own Supabase project");
+    // Every synced field, as in the sessions and hosts tables.
+    expect(text).toContain("title, project label, provider and its session id, status and status reason, last event summary, capabilities");
+    expect(text).toContain("name, platform, connector version, the organisation's remote-control policy, heartbeat and session-source health times");
+    expect(text).toContain("Which alert types you want.");
+    expect(text).toContain("Alert types are saved with your data above, not here.");
+    // D-013 isn't approved, so the names opt-in is neither listed nor promised.
+    expect(text).not.toContain("whether notifications may include names");
+    expect(text).toContain("automated database tests haven't run yet");
+    expect(text).toContain("your sign-in session");
+  });
+
+  it("asks for confirmation; Cancel keeps everything and returns focus", async () => {
+    window.localStorage.setItem(THEME_STORAGE_KEY, "light");
+    await renderSettings();
+    const card = section("Privacy & data");
+    fireEvent.click(clearButton(card));
+    const confirm = within(card).getByRole("group");
+    expect(confirm.textContent).toContain("can't be undone");
+    expect(document.activeElement).toBe(within(confirm).getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
+    expect(within(card).queryByRole("group")).toBeNull();
+    expect(document.activeElement).toBe(clearButton(card));
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
+  });
+
+  it("clears alerts and device preferences, and the other cards show the reset", async () => {
+    window.localStorage.setItem(THEME_STORAGE_KEY, "dark");
+    window.localStorage.setItem(SYSTEM_NOTIFICATIONS_KEY, "on");
+    await renderSettings();
+    const radio = (name: string) => within(screen.getByRole("group", { name: "Theme" })).getByRole("radio", { name }) as HTMLInputElement;
+    expect(radio("Dark").checked).toBe(true);
+    const user = await demo.getUser();
+    const alertKey = `tavro.alerts.v1:demo:${user?.id ?? ""}`;
+    window.localStorage.setItem(alertKey, JSON.stringify([{ id: "a1", kind: "failed", sessionId: "s1", hostId: "h1", at: new Date().toISOString(), isDemo: true, read: false }]));
+
+    const card = section("Privacy & data");
+    fireEvent.click(clearButton(card));
+    fireEvent.click(within(card).getByRole("button", { name: "Clear data" }));
+
+    expect(within(card).getByRole("status").textContent).toContain("Cleared from this device");
+    expect(window.localStorage.getItem(alertKey)).toBe("[]");
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBeNull();
+    expect(window.localStorage.getItem(SYSTEM_NOTIFICATIONS_KEY)).toBeNull();
+    expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
+    expect(radio("System").checked).toBe(true);
+    // The connection is left to Change backend.
+    expect(screen.getByRole("heading", { level: 1, name: "Preferences & connection" })).toBeTruthy();
+  });
+});
+
+describe("Settings: integrations and application", () => {
+  it("lists Claude Code as not enabled yet, with the reason, and offers no control", async () => {
+    await renderSettings();
+    const card = section("Integrations");
+    expect(within(card).getByText("Not enabled yet")).toBeTruthy();
+    expect(card.textContent).toContain("stays off until Tavro's database security tests have run and passed");
+    expect(card.textContent).toContain("demo simulator");
+    expect(within(card).queryByRole("switch")).toBeNull();
+    expect(within(card).queryByRole("checkbox")).toBeNull();
+    expect(within(card).queryByRole("button")).toBeNull();
+  });
+
+  it("shows the version, build, install state and install guidance", async () => {
+    await renderSettings();
+    const card = section("Application");
+    expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+/);
+    expect(within(card).getByText(APP_VERSION)).toBeTruthy();
+    expect(card.textContent).toContain("Running as");
+    expect(card.textContent).toContain("Add to Home Screen");
+    expect(card.textContent).toContain("Install app");
+    expect(card.textContent).toContain("only arrive while Tavro is open");
   });
 });

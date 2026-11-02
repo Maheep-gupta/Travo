@@ -13,12 +13,20 @@ Users can trust Tavro to tell them what their AI coding sessions are doing and w
 
 The requirements source is `docs/PRODUCT_SPEC.md`. Status for every requirement is in `docs/GAP_ANALYSIS.md`; the gap numbers (G#) below refer to it.
 
-**Next cycle:**
-1. **G4, visible freshness.** "Updated Xm ago" (the last successful source read) on cards and on the session and host pages, separate from last activity, with a stale marker. Uses `provider_error_since` and `last_seen_at`.
-2. **G5, offline banner.** Shown when `navigator.onLine` is false or the last successful fetch is over 90 s old. It's announced politely, and sessions aren't presented as live.
-3. **G7, session ↔ alerts.** Related alerts on the session page, with filtering by host or provider from there.
-4. **G10, onboarding and settings completeness.** Setup explains what's collected; pairing waits to confirm the first heartbeat; Account, Privacy, Application and Integrations sections.
-5. **G12, stale-write guard (v3 migration).** Written; its database tests can't run yet.
+**Next cycle** (G numbers are in GAP_ANALYSIS; session continuity is in `docs/EXECUTION_STATE.md`):
+1. **G13, reliability edges.** A request timeout for hung fetches: supabase-js has none, so a hung request currently hides the offline banner. Partial-data presentation when one query fails. A sleep/resume test.
+2. **G19, phone-access local preparation.** A `_headers` template, a deployment runbook, a "project paused or unreachable" state and refetch when the page becomes visible. Deployment itself needs authorization (`docs/PHONE_ACCESS.md`).
+3. **G14** unread alerts on the dashboard; **G15** text search.
+4. **G16** collapsing notification bursts; **G17** bundle budget; **G18** moving pure web logic into `@mc/domain`.
+5. **G20** auth backlog M2, L1, L3.
+
+**Done 2026-11-02 (third cycle):** G4 (visible freshness), G5 (offline banner), G7 (session ↔ alerts), G10 (Settings Account, Privacy & data, Integrations and Application sections; Setup onboarding; pairing confirmation) and G12 (schema v3 stale-write guard, D-015). The theme script moved to a file so a strict CSP is possible. Phone-access architecture is in `docs/PHONE_ACCESS.md`.
+- Fixes from the QA and security reviews:
+  - freshness is capped by the client's own fetch time, and the banner and cards agree;
+  - persistent skipped or failing writes report the source as not responding;
+  - the v3 conflict-key grants;
+  - accurate privacy copy.
+- The database cases are written but not run.
 
 **Done 2026-11-02 (second cycle):** G2, G3, G6, G8 and G11, plus fixes for the defects the new tests found. 250 tests pass.
 

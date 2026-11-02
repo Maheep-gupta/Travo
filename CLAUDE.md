@@ -4,7 +4,7 @@
 
 **Product requirements source: `docs/PRODUCT_SPEC.md`** (founder-approved v1.0). Requirement status lives in `docs/GAP_ANALYSIS.md`, using the spec's Part 19 status labels: Not started, In progress, Implemented, Automated-test verified, Browser/device verified, Security verified, Production ready. Never mark something verified by a check that didn't run.
 
-Start every session by reading `docs/ROADMAP.md` (current milestone, next task, blockers). Durable decisions live in `docs/DECISIONS.md`; quality gates and known limitations in `docs/QUALITY.md`; security model in `docs/SECURITY.md`.
+Start every session by reading `docs/EXECUTION_STATE.md` (where the last session stopped) and `docs/ROADMAP.md` (current milestone, next task, blockers). Durable decisions live in `docs/DECISIONS.md` (D-017 lists what still needs founder authorization); phone-access design in `docs/PHONE_ACCESS.md`; quality gates and known limitations in `docs/QUALITY.md`; security model in `docs/SECURITY.md`.
 
 ## Operating mode (approved by the user 2026-10-29)
 

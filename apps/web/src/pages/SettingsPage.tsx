@@ -1,14 +1,14 @@
 import { useEffect, useId, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { DEFAULT_NOTIFICATION_PREFS, MAX_SCHEMA_VERSION } from "@mc/contracts/constants";
+import { DEFAULT_NOTIFICATION_PREFS } from "@mc/contracts/constants";
 import type { NotificationPrefs } from "@mc/contracts";
-import { forgetAlerts, useAlertStore } from "../alerts-context.js";
-import { useApi, useApiContext } from "../api-context.js";
-import { ErrorState, Notice, PageHeader, Spinner } from "../components.js";
+import { useApi } from "../api-context.js";
+import { ErrorState, PageHeader, Spinner } from "../components.js";
 import { userKey, useUserId } from "../hooks.js";
 import { IconCheck } from "../icons.js";
 import { webStorage } from "../platform.js";
+import { AccountCard, ApplicationCard, IntegrationsCard, PrivacyCard } from "../settings-sections.js";
 import { SystemNotificationsCard } from "../system-notifications-card.js";
 import {
   THEME_PREFERENCES,
@@ -35,17 +35,16 @@ const LABELS: Record<keyof NotificationPrefs, { title: string; hint: string }> =
 
 export function SettingsPage() {
   const api = useApi();
-  const { choice, setChoice } = useApiContext();
-  const alertStore = useAlertStore();
   const queryClient = useQueryClient();
   const prefsKey = userKey(api, useUserId(), "prefs");
   const prefsQuery = useQuery({ queryKey: prefsKey, queryFn: () => api.getNotificationPrefs() });
-  const schema = useQuery({ queryKey: ["schema", api.kind], queryFn: () => api.getSchemaVersion(), staleTime: Infinity });
 
   // `draft` holds unsaved edits; null means "showing what is saved".
   const saved = prefsQuery.data ?? DEFAULT_NOTIFICATION_PREFS;
   const [draft, setDraft] = useState<NotificationPrefs | null>(null);
   const [justSaved, setJustSaved] = useState(false);
+  // Bumped when this device's data is cleared, so the device-preference cards re-read storage.
+  const [deviceGeneration, setDeviceGeneration] = useState(0);
   const prefs = draft ?? saved;
   const dirty = draft !== null && !prefsEqual(draft, saved);
 
@@ -64,62 +63,12 @@ export function SettingsPage() {
     save.reset();
   }
 
-  const projectHost = choice?.kind === "supabase" ? hostOf(choice.config.url) : null;
-
   return (
     <main className="page medium">
       <PageHeader eyebrow="Settings" title="Preferences & connection" />
 
       <div className="settings-grid">
-        <section className="card" aria-labelledby="h-conn">
-          <div className="card-title">
-            <h2 id="h-conn">Connection</h2>
-            <span className={`env-pill static ${api.kind === "demo" ? "demo" : "live"}`}>
-              <span className="dot" aria-hidden="true" />
-              {api.kind === "demo" ? "Demo data" : "Supabase"}
-            </span>
-          </div>
-          <div className="kv">
-            <span>Backend</span>
-            <span>{api.kind === "demo" ? "Demo, in this browser only" : "Your Supabase project"}</span>
-          </div>
-          {projectHost && (
-            <div className="kv">
-              <span>Project</span>
-              <span className="mono">{projectHost}</span>
-            </div>
-          )}
-          <div className="kv">
-            <span>Schema</span>
-            <span className="mono">{schema.data ? `v${schema.data} (app supports ≤ v${MAX_SCHEMA_VERSION})` : "—"}</span>
-          </div>
-          <div className="kv">
-            <span>Replies & approvals</span>
-            <span>Off in this release</span>
-          </div>
-          {api.kind === "demo" && (
-            <div style={{ marginTop: "var(--sp-3)" }}>
-              <Notice>Everything you see is simulated. Connect a Supabase project to see real data once the security checks are complete.</Notice>
-            </div>
-          )}
-          <div className="row" style={{ marginTop: "var(--sp-4)" }}>
-            {api.kind === "supabase" && (
-              <button type="button" className="btn" onClick={() => void api.signOut()}>
-                Sign out
-              </button>
-            )}
-            <button
-              type="button"
-              className="btn ghost"
-              onClick={() => {
-                forgetAlerts(alertStore);
-                setChoice(null);
-              }}
-            >
-              Change backend
-            </button>
-          </div>
-        </section>
+        <AccountCard />
 
         <section className="card" aria-labelledby="h-notif">
           <div className="card-title">
@@ -182,9 +131,15 @@ export function SettingsPage() {
           )}
         </section>
 
-        <SystemNotificationsCard />
+        <SystemNotificationsCard key={`notif-${deviceGeneration}`} />
 
-        <AppearanceCard />
+        <AppearanceCard key={`theme-${deviceGeneration}`} />
+
+        <PrivacyCard onCleared={() => setDeviceGeneration((g) => g + 1)} />
+
+        <IntegrationsCard />
+
+        <ApplicationCard />
       </div>
     </main>
   );
@@ -265,8 +220,4 @@ export function AppearanceCard() {
       </fieldset>
     </section>
   );
-}
-
-function hostOf(url: string): string {
-  return url.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
 }

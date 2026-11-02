@@ -1,144 +1,144 @@
-# Tavro gap analysis
+# Tavro gap analysis (requirements traceability matrix)
 
-**Requirements source:** `docs/PRODUCT_SPEC.md` v1.0.
-**Last updated:** 2026-11-02.
-**Owner:** the product-manager role. The first pass was done by the product-manager agent from code inspection; the main session then updated statuses after integrating that day's work.
-**Test baseline:** `npm test` passes 253 tests, including axe accessibility checks in jsdom (colour contrast not covered) (unit and dom, jsdom). `test:db` has never run (Docker is blocked), and neither has `test:e2e` (browser automation is blocked).
+**Requirements source:** `docs/PRODUCT_SPEC.md` v1.0. Requirement IDs are the spec section numbers (D-016).
+**Last updated:** 2026-11-02, third cycle.
+**Owner:** product-manager role; statuses updated by the main session after integrating each cycle.
+**Test baseline:** `npm test` passes 351 tests (unit and dom/jsdom, including axe checks without colour contrast). `test:db` has never run (Docker is blocked), and neither has `test:e2e` (browser automation is blocked).
 
 **Status labels** (spec Part 19):
 - Not started · In progress · Implemented · Automated-test verified · Browser/device verified · Security verified · Production ready
 - Blocked (reason) · Needs founder decision
 
-**Rules for using them:**
+**Rules:**
 - "Automated-test verified" requires a named test in `npm test`.
-- Nothing is Browser/device verified (browser automation is blocked).
-- Nothing DB-related is Security verified (`test:db` has never run).
+- Nothing is Browser/device verified, because browser automation is blocked.
+- Nothing database-related is Security verified, because `test:db` has never run.
 - Nothing is Production ready.
+- Verification for anything marked Blocked or Not started: the item's own tests, plus a browser/device pass once one is possible.
 
 ## Status by area
 
 ### Dashboard (Part 3)
-| Requirement | Status | Evidence / gap |
-|---|---|---|
-| 3.1 Grouped overview counts | Automated-test verified | `view-model.test.ts`, "status groups". The spec wants a count per state plus a total → **G6**. |
-| 3.1 Sources unavailable reflected | Automated-test verified | `source_unavailable` counts in the Offline/unavailable group (`view-model.test.ts`, "never shows a stale stored status…"). A separate tile → **G6**. |
-| 3.1 No misleading aggregates when stale | Automated-test verified | Offline host → disconnected; failing source → source_unavailable |
-| 3.2 Card content (title, state, project, host, activity, attention) | Implemented | No component test → **G11** |
-| 3.2 Last successful source update on cards | Not started | **G4** |
-| 3.2 No absolute paths or home-folder names | Automated-test verified | `claude-code.test.ts`, "projectLabelFromCwd" |
-| 3.3 URL filters, invalid values ignored | Automated-test verified | `view-model.test.ts`, "dashboard filter in the URL" |
-| 3.3 Per-state, host and project filters | Not started | **G6** |
-| 3.4 Attention, then recency | Automated-test verified | `domain.test.ts`, "filtering and ordering" |
-| 3.4 Other sort orders; deterministic tie-break | Not started | **G6** (`compareByAttention` has no id tie-break) |
-| 3.5 Loading, empty, error states | Implemented | **G11** |
-| 3.5 No hosts vs no sessions; offline; auth expired; partial data | Not started | **G10**, **G5**, **G3** |
-| 3.5 Demo data never looks real | Automated-test verified | `demo.test.ts`, `api-client.test.ts` |
+| ID | Requirement | Status | Evidence / remaining |
+|---|---|---|---|
+| 3.1 | Count per state plus a total; sources unavailable shown; no misleading aggregates when stale | Automated-test verified | `view-model.test.ts`, `DashboardPage.dom.test.tsx` |
+| 3.2 | Card content: title, state, project, host, activity, attention | Automated-test verified | `DashboardPage.dom.test.tsx` |
+| 3.2 | Last successful source update on cards, separate from activity, with a stale marker | Automated-test verified | `freshness.test.ts`, `DashboardPage.dom.test.tsx`. Capped by the client's own fetch time (QA H1 fix). |
+| 3.2 | No absolute paths or home-folder names | Automated-test verified | `claude-code.test.ts` "projectLabelFromCwd" |
+| 3.3 | Filters by state, host, project and provider in the URL; invalid values ignored | Automated-test verified | `view-model.test.ts`, `DashboardPage.dom.test.tsx` |
+| 3.3 | Text search | Not started | **G15** |
+| 3.4 | Attention, then recency; six sort orders; deterministic tie-break | Automated-test verified | `domain.test.ts` "filtering and ordering" |
+| 3.5 | Loading, empty, error states | Automated-test verified | page dom tests, `components.dom.test.tsx` |
+| 3.5 | Offline; auth expired | Automated-test verified | `offline-banner.dom.test.tsx`, `connectivity.test.ts`, `auth.dom.test.tsx` |
+| 3.5 | No hosts vs no sessions; partial data (one query failing) | Implemented | Empty states differ; partial-data presentation is untested → **G13** |
+| 3.5 | Unread alerts on the dashboard | Not started | **G14** |
+| 3.5 | Demo data never looks real | Automated-test verified | `demo.test.ts`, `api-client.test.ts` |
 
 ### Sessions (Part 4)
-| Requirement | Status | Evidence / gap |
-|---|---|---|
-| 4.1 States, with "disconnected" derived | Automated-test verified | `domain.test.ts`, "host connectivity" |
-| 4.1 Source not responding, separate from session state | Automated-test verified | `domain.test.ts` (`displayStatus` with `sourceOk`), `view-model.test.ts`, `alerts.test.ts` "session source health" (6 tests), `connector.test.ts` heartbeat `provider_ok`, demo outage test. The v2 migration and RLS cases are Blocked (Docker). |
-| 4.1 A failed read never becomes completed or ended | Automated-test verified | `connector.test.ts`, "reports a failing provider separately…" |
-| 4.2 No duplicate transitions; reconnect catch-up | Automated-test verified | `connector.test.ts`, `domain.test.ts` `diffObservations` |
-| 4.2 No false transitions after sleep (web) | Implemented | Connectivity is judged at fetch time. Needs a test. |
-| 4.2 Out-of-order updates (newer wins) | Not started | **G12** |
-| 4.3 Detail page basics; untrusted-state explanation | Implemented | `SessionPage.tsx` explains both "disconnected" and "source not responding". **G11**. |
-| 4.3 Source health and last update on detail; related alerts | Not started | **G4**, **G7** |
-| 4.4 No remote commands | Automated-test verified | `connector.test.ts`, "never grants control capabilities" |
+| ID | Requirement | Status | Evidence / remaining |
+|---|---|---|---|
+| 4.1 | States, with "disconnected" derived | Automated-test verified | `domain.test.ts` "host connectivity" |
+| 4.1 | Source not responding, separate from session state | Automated-test verified | `domain.test.ts`, `alerts.test.ts`, `connector.test.ts`. The v2 database cases are Blocked (Docker). |
+| 4.1 | A failed read never becomes completed or ended | Automated-test verified | `connector.test.ts` "reports a failing provider separately…" |
+| 4.2 | No duplicate transitions; catching up after a reconnect | Automated-test verified | `connector.test.ts`, `domain.test.ts` `diffObservations` |
+| 4.2 | No false transitions after sleep (web) | Implemented | Connectivity is judged at fetch time. Needs a dedicated test (**G13**). |
+| 4.2 | Out-of-order updates: newer wins | Automated-test verified (synthetic); database Blocked (Docker) | Schema v3 (D-015). `connector.test.ts` (overlapping connectors, skipped "ended" retry, skip → source not responding), memory transport guard tests, demo clock step-back. The `rls.test.ts` "stale-write guard" cases have not run. |
+| 4.3 | Detail basics; explanation of untrusted states | Automated-test verified | `SessionPage.dom.test.tsx` |
+| 4.3 | Source health and last update on the detail page | Automated-test verified | `SessionPage.dom.test.tsx` |
+| 4.3 | Related alerts; links to the same host or provider | Automated-test verified | `SessionPage.dom.test.tsx`, `view-model.test.ts` `sessionAlerts` |
+| 4.3 | Transcript excerpts (spec) vs D-004 | Needs founder decision | Founder decision 9 |
+| 4.4 | No remote commands | Automated-test verified | `connector.test.ts` "never grants control capabilities" |
 
 ### Alerts (Part 5)
-| Requirement | Status | Evidence / gap |
-|---|---|---|
-| 5.2 Session and host alert kinds | Automated-test verified | `alerts.test.ts`, "detectAlerts" |
-| 5.2 Source unavailable / recovered alerts | Automated-test verified | `alerts.test.ts`, "session source health". They reuse the host preferences (decision D-014). |
-| 5.3 / 5.4 Identity, dedupe, list cap, tabs, sign-out | Automated-test verified | `alerts.test.ts`, `apps/web/src/alerts.test.ts`, `alerts.dom.test.tsx` |
-| 5.4 Switching user A → B without signing out | Not started | Query keys lack the user id → **G2** |
-| 5.5 Notification center | Automated-test verified | `alerts.dom.test.tsx`, "AlertsPage" |
-| 5.6 System notifications (foreground, opt-in, generic) | Automated-test verified (synthetic) | Real browsers: Blocked |
-| 5.6 Session names (D-013) | Needs founder decision | Built and inactive |
-| 5.7 Background push, quiet hours | Blocked (M6 architecture, cloud and IT approval) | |
+| ID | Requirement | Status | Evidence / remaining |
+|---|---|---|---|
+| 5.2 | Session, host and source alert kinds | Automated-test verified | `alerts.test.ts` |
+| 5.3/5.4 | Identity, dedupe, list cap, tabs, sign-out, account switch | Automated-test verified | `alerts.test.ts`, `apps/web/src/alerts.test.ts`, `alerts.dom.test.tsx`, `auth.dom.test.tsx` |
+| 5.5 | Notification center | Automated-test verified | `alerts.dom.test.tsx` "AlertsPage" |
+| 5.6 | System notifications (foreground, opt-in, generic text) | Automated-test verified (synthetic) | Real browsers: Blocked |
+| 5.6 | Session names in notifications (D-013) | Needs founder decision | Built and inactive |
+| 5.7 | Collapse notification bursts | Not started | **G16** |
+| 5.7 | Background push, quiet hours | Blocked (M6 architecture, cloud and IT approval) | Design in `docs/PHONE_ACCESS.md` §3 |
 
 ### Hosts (Part 6)
-| Requirement | Status | Evidence / gap |
-|---|---|---|
-| 6.1 Name, connectivity, last seen, platform, version | Implemented | **G11** |
-| 6.1 Session count and last activity per host | Not started | **G8** |
-| 6.2 Connectivity threshold, never connected, revoked | Automated-test verified | `domain.test.ts` |
-| 6.2 Source not responding on the host card | Implemented | `HostsPage.tsx` `.host-warning`. **G11**. |
-| 6.3 Host detail page | Not started | **G8** |
-| 6.4 Cross-host isolation | Blocked (Docker) | `rls.test.ts` |
+| ID | Requirement | Status | Evidence / remaining |
+|---|---|---|---|
+| 6.1 | Name, connectivity, last seen, platform, version, session count, last activity, last update | Automated-test verified | `HostsPage.dom.test.tsx`, `HostPage.dom.test.tsx` |
+| 6.2 | Connectivity threshold, never connected, revoked, source not responding | Automated-test verified | `domain.test.ts`, `HostPage.dom.test.tsx` |
+| 6.3 | Host detail page | Automated-test verified | `HostPage.dom.test.tsx` |
+| 6.4 | Cross-host isolation | Blocked (Docker) | `rls.test.ts`, which now includes a cross-host upsert case |
 
 ### Claude Code (Part 7)
-| Requirement | Status | Evidence / gap |
-|---|---|---|
-| 7.1 Provider abstraction | Automated-test verified | `Provider` interface; `mapClaudeAgentsStatus` tests |
-| 7.2 Parsing robustness (synthetic) | Automated-test verified | `claude-code.test.ts` |
-| 7.2 Live CLI behaviour | Blocked (Docker, then founder approval) | Checklist in `docs/INTEGRATIONS.md` |
-| 7.3 Privacy: paths, error output | Automated-test verified | `claude-code.test.ts`. Whether session names come from prompts is unknown. |
-| 7.4 Health distinctions in the connector | Automated-test verified | `connector.test.ts`. The UI shows one generic "source not responding" message. |
-| 7.5 Adapter stays disabled | Automated-test verified | `connector.test.ts`, "keeps the real adapter disabled" |
+| ID | Requirement | Status | Evidence / remaining |
+|---|---|---|---|
+| 7.1 | Provider abstraction | Automated-test verified | `Provider` interface; `mapClaudeAgentsStatus` tests |
+| 7.2 | Parsing robustness (synthetic fixtures) | Automated-test verified | `claude-code.test.ts` |
+| 7.2 | Live CLI behaviour | Blocked (Docker, then founder approval) | Checklist in `docs/INTEGRATIONS.md` |
+| 7.3 | Privacy: paths, error output | Automated-test verified | `claude-code.test.ts`. Whether session titles come from prompts is unknown (D-013 risk). |
+| 7.4 | Health distinctions | Automated-test verified | `connector.test.ts`. The UI shows one generic "source not responding" message. |
+| 7.5 | Adapter stays disabled | Automated-test verified | `connector.test.ts` "keeps the real adapter disabled" |
 
 ### Accounts, data and security (Parts 9, 10, 15)
-| Requirement | Status | Evidence / gap |
-|---|---|---|
-| 9.1 Sign-in, sign-out, restore | Implemented | No tests → **G3** and **G11** |
-| 9.1 Expired auth | Not started | `PGRST301` maps to "not allowed" → **G3** |
-| 9.2 Server-side isolation, prefs per owner, forged identity | Blocked (Docker) | `rls.test.ts`, 25 cases including the v2 ones; never run |
-| 10.2 Data inventory (what is stored, and why) | Not started | **G10** (Privacy section) |
-| 10.4 Migration recovery | Implemented (documented) | `ARCHITECTURE.md`; the transaction behaviour is unverified |
-| 15.2 Keys, HTTPS, notification content | Automated-test verified | `api-client.test.ts`, alerts tests |
-| 15.2 Safe database error messages | Implemented | The `toApiError` "invalid" branch passes `e.message` through. Review it under **G3**. |
-| 15.3 Dependency audit | Needs founder decision (`npm audit` is a network call) | Licences reviewed |
+| ID | Requirement | Status | Evidence / remaining |
+|---|---|---|---|
+| 9.1 | Sign-in, sign-out, restore, expired sign-in | Automated-test verified | `auth.dom.test.tsx`, `SignInPage.dom.test.tsx`, `errors.test.ts` |
+| 9.2 | Isolation in the client (cache keys, alerts, account switch) | Automated-test verified | `auth.dom.test.tsx` |
+| 9.2 | Isolation on the server (RLS, prefs per owner, forged identity) | Blocked (Docker) | `rls.test.ts`, never run |
+| 10.2 | Data inventory: what is stored, where, and why | Automated-test verified | Settings "Privacy & data" and Setup "Before you start" (`SettingsPage.dom.test.tsx`, `SetupPage.dom.test.tsx`). Claims checked against code by the security review. |
+| 10.4 | Migration recovery | Implemented (documented) | `ARCHITECTURE.md`; transaction behaviour unverified |
+| 15.2 | Keys, HTTPS, notification content, safe error messages | Automated-test verified | `api-client.test.ts`, `errors.test.ts`, `components.dom.test.tsx`, alerts tests |
+| 15.2 | Strict CSP possible (no inline script) | Automated-test verified | `theme.dom.test.tsx`. The header itself ships at deployment (`docs/PHONE_ACCESS.md` §4). |
+| 15.3 | Dependency audit | Needs founder decision (`npm audit` is a network call) | Licences reviewed |
 
 ### Onboarding, settings, UX, PWA (Parts 11–14)
-| Requirement | Status | Evidence / gap |
-|---|---|---|
-| 11.1 What Tavro does | Implemented (minimal) | Setup page |
-| 11.1 What is collected and stored, and where; what's unavailable | Not started | **G10** |
-| 11.2 Pairing flow | Implemented | End to end: Blocked (Docker) |
-| 11.3 Verify that the first host connected (never assume success) | Not started | **G10** |
-| 11.3 Invalid configuration and schema mismatch | Automated-test verified | `form-errors.test.ts`, `domain.test.ts` "schema compatibility" (v1 rejected, v2 accepted) |
-| 12 Notifications settings | Automated-test verified | Alert preferences and system-notification tests |
-| 12 Appearance: system / dark / light | Automated-test verified | `theme.test.ts`, `theme.dom.test.tsx` (16 tests). Visual result: Blocked (browser). Follow-up: CSP hash for the inline theme script. |
-| 12 Account, Integrations, Privacy, Application sections | Not started | **G10** |
-| 13.3 Accessibility, tested | Not started | No axe assertions → **G11** |
-| 13.2 / 13.3 Responsive layout and contrast | Implemented (code review) | Blocked (browser) |
-| 14.1 Manifest and icons | Implemented | Installing: Blocked (browser) |
-| 14.1 Install guidance in the app | Not started | **G10** |
-| 14.2 Offline indication | Not started | **G5** |
-| 14.3 Device testing | Blocked (browser and device automation; no deployment) | |
+| ID | Requirement | Status | Evidence / remaining |
+|---|---|---|---|
+| 11.1 | What Tavro does, collects and can't do; demo mode | Automated-test verified | `SetupPage.dom.test.tsx` |
+| 11.2 | Pairing flow | Implemented | End to end: Blocked (Docker) |
+| 11.3 | Confirm that the first host connected (never assume success) | Automated-test verified | `HostsPage.dom.test.tsx`, `view-model.test.ts` `pairingStatus` |
+| 11.3 | Invalid configuration and schema mismatch | Automated-test verified | `form-errors.test.ts`, `domain.test.ts` "schema compatibility" (v2 rejected, v3 accepted) |
+| 12 | Account, Alerts, System notifications, Appearance, Privacy & data, Integrations, Application | Automated-test verified | `SettingsPage.dom.test.tsx`, `theme.*`, system-notification tests. There are no dead controls: Integrations and Application only show information. |
+| 13.3 | Accessibility checks | Automated-test verified (jsdom axe, no contrast) | `a11y.dom.test.tsx` |
+| 13.2/13.3 | Responsive layout, contrast | Implemented (code review) | Blocked (browser) |
+| 14.1 | Manifest, icons, install guidance in the app | Automated-test verified | `SettingsPage.dom.test.tsx` "Application". Installing: Blocked (browser). |
+| 14.2 | Offline indication; cached states never shown as live | Automated-test verified | `offline-banner.dom.test.tsx`, `connectivity.test.ts`, freshness tests |
+| 14.3 | Device testing | Blocked (no deployment, no browser automation) | |
+| 14.4 | Phone access | Needs founder decision | Architecture in `docs/PHONE_ACCESS.md`; provisioning needs authorization |
 
 ### Reliability (Part 16)
-Automated-test verified: CLI failure, connector silence, connector network loss, duplicates, concurrent tabs, session disappearance, host recovery, app refresh.
-Implemented without a test: web network loss (pauses detection), sleep (fetch-time judgement), database unavailable (ErrorState).
-Not started: auth expired (**G3**), out-of-order updates (**G12**), account switching (**G2**), collapsing notification bursts.
+- **Automated-test verified:** CLI failure, connector silence, connector network loss, duplicates, concurrent tabs, session disappearance, host recovery, app refresh, auth expired, account switching, web offline, out-of-order writes (synthetic), writes skipped or failing while the heartbeat works.
+- **Implemented without a test:** sleep (judged at fetch time), database unavailable (ErrorState).
+- **Not started:** collapsing notification bursts (**G16**), a request timeout for hung fetches (**G13**).
+
+### Performance (Part 17)
+| ID | Requirement | Status | Evidence / remaining |
+|---|---|---|---|
+| 17 | Lazy routes; bundle budget | Implemented | Pages lazy-load. There's no automated size budget → **G17** |
 
 ## Prioritized gaps
 
-| # | Gap | Depends on | Parallel-safe with |
+Done: G1–G12 (G1, G2, G3, G6, G8, G9 and G11 in cycles 1–2; G4, G5, G7, G10 and G12 on 2026-11-02 in cycle 3, with fixes for the QA and security review findings).
+
+| # | Gap | Depends on | Notes |
 |---|---|---|---|
-| G1 | Source not responding | — | **Done 2026-11-02** (database cases unrun) |
-| G9 | Source alerts | G1 | **Done 2026-11-02** |
-| G2 | Account-switch isolation | — | **Done 2026-11-02.** User id in every user-data key; cache cleared on any user change; alerts forgotten when the user changes. Tested in `auth.dom.test.tsx`. Security-reviewed 2026-11-02: no high-severity issues. Fixed M1 (a late 401 from another user's query is now ignored), M3 (local sign-out failure drops the stored session) and L2 (only ApiError text is shown). |
-| G3 | Expired auth | — | **Done 2026-11-02.** `toApiError` maps 401 and PGRST301–303 to `unauthorized` with no raw database text (`errors.test.ts`); sign-in page shows an "expired" notice; no retries on `unauthorized`. |
-| G11 | Component and accessibility tests | — | **Done 2026-11-02.** SessionPage, Setup, Sign-in and Settings component tests; axe on every page in jsdom. Found and fixed: Setup inputs that were named twice, and wrong wording for revoked or missing hosts. |
-| G4 | Visible freshness: "Updated Xm ago", separate from activity; stale marker | G1 ✓ | G8 | Host detail | — | **Done 2026-11-02.** `/hosts/:id` with health, identity and sessions; session count and last activity on the Hosts list (`HostPage.dom.test.tsx`). |
-| G5 | Offline banner: "Offline, showing data from HH:MM" | — | after G2/G3 (shell) |
-| G6 | Counts, filters and sorting to spec | — | **Done 2026-11-02.** Total plus a count per state; state, host, project and provider filters in the URL; six sort orders with an id tie-break (`domain.test.ts`, `DashboardPage.dom.test.tsx`). Still open: unread alerts on the dashboard. |
-| G7 | Session ↔ alerts link, plus filter by host or provider from a session | — | G6 |
-| G8 | Host detail `/hosts/:id`, with session count and last activity | G1 ✓ | G6 |
-| G10 | Onboarding verification; Settings Account, Privacy, Application and Integrations | Appearance ✓ | G6 |
-| G12 | Stale-write guard (newer wins) in a v3 migration; database cases unrun | G1 ✓ | anything outside `supabase/` |
+| G13 | Reliability edges: request timeout for hung fetches (supabase-js has none), partial-data presentation, sleep/resume test | — | Spec 3.5, 16 |
+| G14 | Unread alerts on the dashboard (G6 leftover) | — | Spec 3.5 |
+| G15 | Dashboard text search (title or project) | — | Spec 3.3, directive §5A |
+| G16 | Collapse notification bursts | — | Spec 5.7, 16 |
+| G17 | Automated bundle-size budget in `npm run check` | — | Spec 17 |
+| G18 | Move pure web logic (`pairingStatus`, `connectivity.ts`) into `@mc/domain` for Expo reuse | — | Maintainability |
+| G19 | Phone-access local preparation: `_headers` template, deployment runbook, "project paused or unreachable" state, refetch when visible | — | `docs/PHONE_ACCESS.md`. Deployment itself needs authorization. |
+| G20 | Auth backlog M2, L1, L3 (from the 2026-11-02 security review) | — | See ROADMAP backlog |
 
 ## Founder decisions pending
-1. Licence (the public repo has none, so it's all rights reserved).
+1. Licence. The public repo has none, so it's all rights reserved.
 2. D-013: session names in notifications.
 3. Whether to run `npm audit`.
-4. Deployment and hosting for phone access. Without it, the core value proposition (spec 1.4) can't be met.
+4. Phone access (spec 1.4), in the order given in `docs/PHONE_ACCESS.md` §5: IT clearance, a Supabase project, hosting, deployment.
 5. Fixing Docker, or another way to run `test:db`. Enabling the real adapter then needs separate approval.
-6. A manual or alternative browser and device check.
+6. A manual browser and device check.
 7. Claude Code hooks (an edit to `~/.claude/settings.json`).
 8. Background push architecture (M6).
-9. Transcript excerpts: confirm D-004 (loopback-only "Recent messages") against spec 4.3, or hide that card for real providers.
+9. Transcript excerpts: confirm D-004 against spec 4.3.
 10. Open sign-ups in BYOS projects: confirm the guidance to disable them after creating the owner account.
+11. Pushing the local commits to the public repo.

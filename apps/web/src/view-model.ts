@@ -1,41 +1,76 @@
-import type { HostRow, ProviderId, SessionRow } from "@mc/contracts";
+import type { HostRow, PairingTicket, ProviderId, SessionRow } from "@mc/contracts";
 import {
   DEFAULT_SESSION_SORT,
   PROVIDERS,
   STATUS_LABEL,
   compareByAttention,
+  connectivityJudgedAt,
   displayStatus,
   hostConnectivity,
+  hostFreshness,
   hostSourceOk,
   isSessionSort,
   matchesFilter,
+  sessionFreshness,
   sortSessions,
+  withClientRead,
+  type ClientSync,
   type DisplayStatus,
+  type Freshness,
   type HostConnectivity,
   type SessionSort,
+  type StoredAlert,
 } from "@mc/domain";
 
 export interface SessionView extends SessionRow {
   displayStatus: DisplayStatus;
   hostName: string;
   hostConnectivity: HostConnectivity;
+  /** When this session's source was last read successfully; separate from last activity. */
+  freshness: Freshness;
 }
 
-/** Joins sessions with their hosts and applies the domain's connectivity rules. */
-export function buildSessionViews(sessions: readonly SessionRow[], hosts: readonly HostRow[], now: Date): SessionView[] {
+/** How current the client's copy is (from useConnection) and when each list was last fetched (epoch ms; 0 or null = never). */
+export interface ClientState {
+  sync: ClientSync;
+  sessionsFetchedAt: number | null;
+  hostsFetchedAt: number | null;
+}
+
+/**
+ * Joins sessions with their hosts and applies the domain's connectivity rules.
+ * Connectivity is judged when the host list was fetched while the client isn't
+ * current, so a phone that can't refresh doesn't report healthy hosts as
+ * offline; freshness is then capped at the session list's own fetch.
+ */
+export function buildSessionViews(sessions: readonly SessionRow[], hosts: readonly HostRow[], now: Date, client: ClientState): SessionView[] {
   const byId = new Map(hosts.map((h) => [h.id, h]));
+  const judgedAt = connectivityJudgedAt(client.sync, client.hostsFetchedAt, now);
+  const read = { sync: client.sync, fetchedAt: client.sessionsFetchedAt };
   return sessions
     .map((s) => {
       const host = byId.get(s.host_id);
-      const connectivity: HostConnectivity = host ? hostConnectivity(host, now) : "disconnected";
+      const connectivity: HostConnectivity = host ? hostConnectivity(host, judgedAt) : "disconnected";
       return {
         ...s,
         displayStatus: displayStatus(s.status, connectivity, host ? hostSourceOk(host) : true),
         hostName: host?.name ?? "Unknown host",
         hostConnectivity: connectivity,
+        freshness: withClientRead(sessionFreshness(s, host, judgedAt), read, now),
       };
     })
     .sort(compareByAttention);
+}
+
+export interface HostView {
+  connectivity: HostConnectivity;
+  freshness: Freshness;
+}
+
+/** One host's connectivity and freshness, judged like buildSessionViews; `fetchedAt` is the host list's. */
+export function buildHostView(host: HostRow, now: Date, client: { sync: ClientSync; fetchedAt: number | null }): HostView {
+  const judgedAt = connectivityJudgedAt(client.sync, client.fetchedAt, now);
+  return { connectivity: hostConnectivity(host, judgedAt), freshness: withClientRead(hostFreshness(host, judgedAt), client, now) };
 }
 
 /** Presentation-only grouping of display statuses: "Need you" on the dashboard, plus legacy `group` links. */
@@ -194,4 +229,45 @@ export function projectOptions(views: readonly { project_label: string | null }[
   const labels = new Set<string>();
   for (const v of views) if (v.project_label) labels.add(v.project_label);
   return [...labels].sort((a, b) => a.localeCompare(b, "en", { sensitivity: "base" }) || (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/** Alerts about one session, newest event first (unparseable times last). */
+export function sessionAlerts(alerts: readonly StoredAlert[], sessionId: string): StoredAlert[] {
+  const time = (a: StoredAlert) => Date.parse(a.at) || 0;
+  return alerts.filter((a) => a.sessionId === sessionId).sort((a, b) => time(b) - time(a));
+}
+
+/**
+ * Pairing confirmation (spec 11.3): a created code proves nothing, so success
+ * is only claimed once the new host has actually heartbeated.
+ * - waiting: code not used yet (or the host list hasn't caught up);
+ * - paired: the connector exchanged the code but hasn't heartbeated yet;
+ * - connected: heartbeating now;
+ * - stopped: it heartbeated, but has since stopped reporting;
+ * - expired: the code expired unused; revoked: access was revoked meanwhile.
+ */
+export type PairingStatus = "waiting" | "paired" | "connected" | "stopped" | "expired" | "revoked";
+
+export function pairingStatus(ticket: Pick<PairingTicket, "expires_at">, host: HostRow | undefined, now: Date): PairingStatus {
+  if (host) {
+    const connectivity = hostConnectivity(host, now);
+    if (connectivity === "revoked") return "revoked";
+    if (connectivity === "online") return "connected";
+    if (connectivity === "disconnected") return "stopped";
+    if (host.paired_at) return "paired";
+  }
+  const expires = Date.parse(ticket.expires_at);
+  return !Number.isNaN(expires) && now.getTime() > expires ? "expired" : "waiting";
+}
+
+export const PAIRING_POLL_MS = 3_000;
+/** Polling stops this long after the code expires, so an abandoned page doesn't poll forever. */
+export const PAIRING_POLL_GRACE_MS = 5 * 60_000;
+
+/** How often to re-read hosts while confirming a pairing, or false to stop. */
+export function pairingPollInterval(status: PairingStatus, ticket: Pick<PairingTicket, "expires_at">, now: Date): number | false {
+  if (status !== "waiting" && status !== "paired") return false;
+  const expires = Date.parse(ticket.expires_at);
+  if (Number.isNaN(expires)) return false;
+  return now.getTime() <= expires + PAIRING_POLL_GRACE_MS ? PAIRING_POLL_MS : false;
 }

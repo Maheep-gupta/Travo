@@ -6,15 +6,8 @@
     <meta name="theme-color" content="#f5f2eb" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#111412" media="(prefers-color-scheme: dark)" />
     <meta name="color-scheme" content="dark light" />
-    <!-- Appearance: apply an explicit Dark/Light choice before first paint. Keep in
-         sync with THEME_STORAGE_KEY in src/theme.ts; main.tsx re-applies it with the
-         metas. A future CSP must allow this script by hash. -->
-    <script>
-      try {
-        var t = localStorage.getItem("tavro.theme.v1");
-        if (t === "dark" || t === "light") document.documentElement.setAttribute("data-theme", t);
-      } catch (e) {}
-    </script>
+    <!-- Appearance: applies a stored Dark/Light choice before first paint (see the file). -->
+    <script src="/theme-init.js"></script>
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />

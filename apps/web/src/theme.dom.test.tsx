@@ -1,7 +1,8 @@
-// Component tests for Appearance: the Settings radio group and the inline
-// pre-paint script in index.html.
+// Component tests for Appearance: the Settings radio group and the
+// pre-paint script loaded by index.html.
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import themeInit from "../public/theme-init.js?raw";
 import indexHtml from "../index.html?raw";
 import { AppearanceCard } from "./pages/SettingsPage.js";
 import { THEME_COLORS, THEME_STORAGE_KEY } from "./theme.js";
@@ -60,8 +61,14 @@ describe("Appearance setting", () => {
 });
 
 describe("index.html pre-paint script", () => {
-  const script = /<script>([\s\S]*?)<\/script>/.exec(indexHtml)?.[1] ?? "";
+  const script = themeInit;
   const run = () => new Function(script)();
+
+  it("is loaded from a same-origin file before the app, with no inline script (strict CSP)", () => {
+    expect(indexHtml).toContain('<script src="/theme-init.js"></script>');
+    expect(indexHtml.indexOf("/theme-init.js")).toBeLessThan(indexHtml.indexOf("/src/main.tsx"));
+    expect(indexHtml).not.toMatch(/<script>/);
+  });
 
   it("uses the same storage key as theme.ts", () => {
     expect(script).toContain(`"${THEME_STORAGE_KEY}"`);

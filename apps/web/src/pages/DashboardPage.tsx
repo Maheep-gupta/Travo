@@ -1,10 +1,22 @@
 import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router";
-import { PROVIDERS, SESSION_SORTS, STATUS_LABEL, isSessionSort, needsAttention, relativeTime, type DisplayStatus, type SessionSort } from "@mc/domain";
+import {
+  PROVIDERS,
+  SESSION_SORTS,
+  STALE_REASON_LABEL,
+  STATUS_LABEL,
+  freshnessLabel,
+  isSessionSort,
+  needsAttention,
+  relativeTime,
+  type DisplayStatus,
+  type Freshness,
+  type SessionSort,
+} from "@mc/domain";
 import { useApi } from "../api-context.js";
 import { DemoTag, EmptyState, ErrorState, PageHeader, SessionListSkeleton, StatusBadge } from "../components.js";
 import { useHosts, useNow, useSessionViews } from "../hooks.js";
-import { IconFolder, IconHost, IconSearch, IconSessions } from "../icons.js";
+import { IconClock, IconFolder, IconHost, IconSearch, IconSessions } from "../icons.js";
 import {
   EMPTY_DASHBOARD_FILTER,
   EXTRA_STATES,
@@ -272,13 +284,15 @@ export function SessionCard({ session: s, now }: { session: SessionView; now: Da
       <div className="sc-top">
         <StatusBadge status={s.displayStatus} />
         {s.is_demo && <DemoTag />}
-        <span className="sc-time" title={s.last_activity_at ? new Date(s.last_activity_at).toLocaleString() : undefined}>
+        <span className="sc-time" title={s.last_activity_at ? `Last activity ${new Date(s.last_activity_at).toLocaleString()}` : undefined}>
+          <span className="sr-only">Last activity </span>
           {relativeTime(s.last_activity_at, now)}
         </span>
       </div>
       <h3 className="sc-title">{s.title ?? s.external_id}</h3>
       {s.last_event_summary && <p className="sc-summary">{s.last_event_summary}</p>}
       <div className="sc-meta">
+        <FreshnessNote freshness={s.freshness} now={now} />
         {s.project_label && (
           <span>
             <IconFolder />
@@ -298,5 +312,27 @@ export function SessionCard({ session: s, now }: { session: SessionView; now: Da
         )}
       </div>
     </Link>
+  );
+}
+
+/**
+ * "Updated 5m ago" (last successful source read), with a text stale marker.
+ * Shared by session cards, session and host detail, and host cards.
+ */
+export function FreshnessNote({ freshness: f, now, withReason = false }: { freshness: Freshness; now: Date; withReason?: boolean }) {
+  return (
+    <span
+      className={`fresh ${f.stale ? "fresh-stale" : ""}`}
+      title={f.lastReadAt ? `Last successful read ${f.stale ? "no later than " : ""}${new Date(f.lastReadAt).toLocaleString()}` : undefined}
+    >
+      <IconClock />
+      {freshnessLabel(f, now)}
+      {f.reason !== "current" && (
+        <span className="stale-tag">
+          {/* Spoken as part of the sentence; shown as a separate tag. */}
+          <span className="sr-only">, </span>Stale{withReason && <>: {STALE_REASON_LABEL[f.reason]}</>}
+        </span>
+      )}
+    </span>
   );
 }

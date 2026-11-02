@@ -52,7 +52,11 @@ export interface Transport {
   heartbeat(input: HeartbeatInput): Promise<void>;
   /** Sessions previously reported by this host, keyed by provider external_id. */
   loadKnownSessions(provider: ProviderId): Promise<Map<string, KnownSession>>;
-  /** Upserts and returns external_id -> session id. */
+  /**
+   * Upserts and returns external_id -> session id for the rows the backend
+   * kept. A row whose observed_at is older than the stored one is skipped
+   * (schema v3, "newer wins") and is absent from the result; that is not an error.
+   */
   upsertSessions(rows: SessionUpsert[]): Promise<Map<string, string>>;
   /** Inserts events, ignoring ones whose (session_id, dedupe_key) already exists. */
   insertEvents(events: EventInput[]): Promise<void>;

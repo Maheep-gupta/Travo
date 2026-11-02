@@ -76,6 +76,14 @@
 - The UI never shows a stored session status as current while it is set.
 - Test cases are in `supabase/tests/rls.test.ts`, **written, not yet run** (Docker).
 
+**Out-of-order session writes (schema v3, 2026-11-02):**
+- `sessions.observed_at` is required on every write and clamped by trigger to `now() + 5 minutes`, so a host with a wrong clock can't pin its own sessions for longer than that.
+- An update with an older `observed_at` is skipped silently by `sessions_guard_update`. The immutable-column checks run first, so a stale write can't be used to slip past them.
+- This is an integrity rule, not an access rule. It only orders writes a host can already make: RLS still allows session writes only from the active host that owns the row, and owners still can't write sessions. `observed_at` gets the same column grants as the other connector-written columns.
+- v3 also grants UPDATE on `host_id`, `provider` and `external_id`. PostgREST upserts set every payload column on conflict, and without these grants the second upsert of a row would very probably fail with 42501. The trigger rejects any change to them, and `rls.test.ts` asserts the trigger's own error for a forged move. Another host's upsert against this host's conflict key is refused by RLS (test added).
+- If writes keep being skipped, or keep failing after a good heartbeat, the connector reports its source as not responding after 3 cycles (D-015). A host whose clock is behind therefore can't present frozen statuses as current.
+- Test cases are in `supabase/tests/rls.test.ts` ("stale-write guard"), **written, not yet run** (Docker).
+
 ## Known gaps and risks
 
 1. **RLS unverified** until Docker works. This is the gate for enabling real data.

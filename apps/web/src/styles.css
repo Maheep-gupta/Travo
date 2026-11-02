@@ -604,3 +604,38 @@ a.env-pill:hover { background: var(--surface-2); }
   .state-chip .dot { forced-color-adjust: none; border: 1px solid CanvasText; }
   .state-chip[aria-pressed="true"] { outline: 2px solid Highlight; }
 }
+
+/* ---------- Freshness (last successful source read, G4) ---------- */
+.fresh { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.fresh svg { width: 14px; height: 14px; color: var(--faint); flex: none; }
+.stale-tag {
+  display: inline-flex; align-items: center; padding: 0 6px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--st-approval) 50%, var(--line));
+  color: var(--st-approval); font-size: 0.76rem; font-weight: 600; line-height: 1.5; white-space: nowrap;
+}
+.facts .fresh { font-size: inherit; }
+
+/* ---------- Session: related alerts and filters (G7) ---------- */
+.related-alerts { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.related-alerts li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px var(--sp-2); padding: 8px 0; border-top: 1px solid var(--line); font-size: 0.9rem; }
+.related-alerts li:first-child { border-top: 0; padding-top: 0; }
+.related-alerts .ra-kind { font-weight: 600; }
+.related-alerts li:not(.unread) .ra-kind { font-weight: 500; color: var(--text-2); }
+.related-alerts .ra-unread { font-size: 0.76rem; font-weight: 600; color: var(--accent); }
+.related-alerts time { margin-left: auto; font: 500 0.78rem var(--mono); color: var(--faint); white-space: nowrap; }
+.related-empty { display: flex; align-items: center; gap: var(--sp-2); margin: 0; }
+.related-empty svg { width: 16px; height: 16px; flex: none; }
+.session-filters { list-style: none; margin: var(--sp-3) 0 0; padding: var(--sp-3) 0 0; border-top: 1px solid var(--line); display: grid; gap: var(--sp-2); font-size: 0.9rem; }
+.session-filters a { display: inline-flex; align-items: center; min-height: 32px; overflow-wrap: anywhere; }
+@media (pointer: coarse) { .session-filters a { min-height: 44px; } }
+
+/* ---------- Pairing confirmation (spec 11.3) ---------- */
+.pairing-state { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-2); padding-top: var(--sp-3); border-top: 1px solid var(--line); font-size: 0.9rem; }
+.pairing-state p { flex: 1 1 14rem; margin: 0; }
+.pairing-state svg { width: 18px; height: 18px; flex: none; margin-top: 1px; color: var(--muted); }
+.pairing-state.ps-connected svg { color: var(--st-working); }
+.pairing-state.ps-stopped svg, .pairing-state.ps-expired svg, .pairing-state.ps-revoked svg { color: var(--st-approval); }
+
+@media (forced-colors: active) {
+  .stale-tag { border-color: CanvasText; }
+}

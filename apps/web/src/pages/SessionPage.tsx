@@ -1,11 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router";
 import type { Capability, SessionStatus } from "@mc/contracts";
-import { PROVIDERS, STATUS_LABEL, hasCapability, relativeTime, type HostConnectivity } from "@mc/domain";
+import { ALERT_LABEL, PROVIDERS, STATUS_LABEL, hasCapability, relativeTime, type HostConnectivity } from "@mc/domain";
+import { useAlerts } from "../alerts-context.js";
 import { useApi } from "../api-context.js";
 import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, SessionListSkeleton, Spinner, StatusBadge } from "../components.js";
 import { useNow, useSessionViews, userKey, useUserId } from "../hooks.js";
-import { IconArrowLeft, IconCheck, IconFolder, IconHost, IconLock, IconSessions } from "../icons.js";
+import { IconArrowLeft, IconBell, IconCheck, IconFolder, IconHost, IconLock, IconSessions } from "../icons.js";
+import { EMPTY_DASHBOARD_FILTER, dashboardFilterParams, sessionAlerts } from "../view-model.js";
+import { FreshnessNote } from "./DashboardPage.js";
 
 const CAPABILITY_LABEL: Record<Capability, string> = {
   discover: "Discover sessions",
@@ -52,6 +55,7 @@ export function SessionPage() {
   const now = useNow();
   const sessions = useSessionViews();
   const session = sessions.data?.find((s) => s.id === id);
+  const alerts = useAlerts();
 
   const events = useQuery({
     queryKey: userKey(api, userId, "sessions", "events", id),
@@ -102,6 +106,9 @@ export function SessionPage() {
   const canReply = hasCapability(session.capabilities, "send_message");
   const untrusted = session.displayStatus === "disconnected" || session.displayStatus === "source_unavailable";
   const reasonText = untrusted ? null : session.status_reason;
+  const related = sessionAlerts(alerts, session.id);
+  const dashboardLink = (patch: { host?: string; provider?: typeof session.provider }) =>
+    `/?${dashboardFilterParams({ ...EMPTY_DASHBOARD_FILTER, ...patch }).toString()}`;
 
   return (
     <main className="page">
@@ -131,6 +138,7 @@ export function SessionPage() {
             <IconSessions />
             {provider.label}
           </span>
+          <FreshnessNote freshness={session.freshness} now={now} withReason />
         </div>
         {session.displayStatus === "source_unavailable" ? (
           <p className="reason">
@@ -192,6 +200,32 @@ export function SessionPage() {
               </ol>
             ) : (
               <p className="muted">No status changes recorded yet.</p>
+            )}
+          </section>
+
+          <section className="card" aria-labelledby="h-alerts">
+            <div className="card-title">
+              <h2 id="h-alerts">Alerts for this session</h2>
+              <Link to="/alerts">All alerts</Link>
+            </div>
+            {related.length ? (
+              <ul className="related-alerts">
+                {related.map((a) => (
+                  <li key={a.id} className={a.read ? undefined : "unread"}>
+                    <span className="ra-kind">{ALERT_LABEL[a.kind]}</span>
+                    {!a.read && <span className="ra-unread">Unread</span>}
+                    {a.isDemo && <DemoTag />}
+                    <time dateTime={a.at} title={formatTime(a.at)}>
+                      {relativeTime(a.at, now)}
+                    </time>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted related-empty">
+                <IconBell />
+                No alerts for this session while Tavro has been open on this device.
+              </p>
             )}
           </section>
 
@@ -279,6 +313,16 @@ export function SessionPage() {
                 <dd className="mono">{session.external_id}</dd>
               </div>
             </dl>
+            <ul className="session-filters" aria-label="Find similar sessions">
+              {session.freshness.reason !== "host_unknown" && (
+                <li>
+                  <Link to={dashboardLink({ host: session.host_id })}>All sessions on {session.hostName}</Link>
+                </li>
+              )}
+              <li>
+                <Link to={dashboardLink({ provider: session.provider })}>All {provider.label} sessions</Link>
+              </li>
+            </ul>
           </section>
 
           <section className="card" aria-labelledby="h-caps">

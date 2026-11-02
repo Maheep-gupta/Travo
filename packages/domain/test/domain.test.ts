@@ -228,9 +228,12 @@ describe("schema compatibility", () => {
     expect(checkSchemaCompat(null)).toMatchObject({ ok: false, reason: "not_installed" });
     expect(checkSchemaCompat(0)).toMatchObject({ ok: false, reason: "too_old" });
     expect(checkSchemaCompat(99)).toMatchObject({ ok: false, reason: "too_new" });
-    // v2 (source health) is required: v1 lacks hosts.provider_error_since.
+    // v3 (stale-write guard) is required: v1 lacks hosts.provider_error_since and
+    // v2 lacks sessions.observed_at, which every connector write now carries.
     expect(checkSchemaCompat(1)).toMatchObject({ ok: false, reason: "too_old" });
-    expect(checkSchemaCompat(2)).toEqual({ ok: true });
+    expect(checkSchemaCompat(2)).toMatchObject({ ok: false, reason: "too_old" });
+    expect(checkSchemaCompat(3)).toEqual({ ok: true });
+    expect(checkSchemaCompat(4)).toMatchObject({ ok: false, reason: "too_new" });
   });
 });
 

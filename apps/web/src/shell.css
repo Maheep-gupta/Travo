@@ -1,0 +1,41 @@
+/* App shell additions: offline banner, Settings information sections, setup onboarding. Uses tokens from styles.css. */
+
+/* ---------- Offline / stale data banner ---------- */
+/* In the page flow below the top bar, so it never covers content. */
+/* The live region stays rendered (empty, zero height) so screen readers announce text added to it. */
+.offline-banner {
+  --c: var(--st-offline);
+  display: flex; gap: var(--sp-3); align-items: flex-start;
+  width: calc(100% - 2 * var(--sp-4)); max-width: calc(1080px - 2 * var(--sp-4));
+  margin: var(--sp-3) auto 0; padding: 10px var(--sp-4);
+  background: color-mix(in srgb, var(--c) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--c) 35%, var(--line));
+  border-radius: var(--r-md);
+}
+.offline-banner.unreachable, .offline-banner.stale { --c: var(--st-approval); }
+.offline-banner > svg { width: 18px; height: 18px; flex: none; margin-top: 2px; color: var(--c); }
+.offline-banner > p { flex: 1; min-width: 0; margin: 0; font-size: 0.9rem; color: var(--text-2); overflow-wrap: anywhere; }
+.offline-banner strong { color: var(--text); font-weight: 600; }
+@media (min-width: 720px) { .offline-banner { width: calc(100% - 2 * var(--sp-5)); max-width: calc(1080px - 2 * var(--sp-5)); } }
+
+/* ---------- Settings: information sections ---------- */
+.settings-note { margin-top: var(--sp-3); }
+.settings-actions { margin-top: var(--sp-4); display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.settings-h3 { font-size: 0.88rem; margin: var(--sp-4) 0 var(--sp-2); }
+.card-title + .settings-h3, .card-sub + .settings-h3 { margin-top: 0; }
+.settings-list { margin: 0; padding-left: 1.1rem; display: grid; gap: 6px; font-size: 0.9rem; color: var(--text-2); }
+.settings-list strong { color: var(--text); font-weight: 600; }
+.settings-list ul { margin: 6px 0 0; padding-left: 1.1rem; display: grid; gap: 4px; }
+.settings-small { font-size: 0.85rem; margin-top: var(--sp-3); }
+.settings-confirm { display: grid; gap: var(--sp-3); width: 100%; padding: var(--sp-3); border: 1px solid color-mix(in srgb, var(--st-failed) 35%, var(--line)); border-radius: var(--r-md); background: var(--st-failed-bg); }
+.settings-confirm p { margin: 0; font-size: 0.9rem; color: var(--text); }
+.integration { display: grid; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+.integration-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; }
+.integration-head .settings-h3 { margin: 0; }
+.integration p { margin: 0; font-size: 0.9rem; }
+
+/* ---------- Setup: onboarding ---------- */
+.onboarding h2 { font-size: 0.95rem; margin-bottom: var(--sp-3); }
+.onboarding dl { margin: 0; display: grid; gap: var(--sp-3); }
+.onboarding dt { font-weight: 600; font-size: 0.9rem; color: var(--text); }
+.onboarding dd { margin: 2px 0 0; font-size: 0.88rem; color: var(--muted); }

@@ -6,3 +6,4 @@ export * from "./sessions.js";
 export * from "./schema-compat.js";
 export * from "./time.js";
 export * from "./alerts.js";
+export * from "./freshness.js";

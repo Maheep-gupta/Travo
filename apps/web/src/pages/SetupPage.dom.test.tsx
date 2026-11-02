@@ -142,6 +142,25 @@ describe("SetupPage", () => {
     await waitFor(() => expect(choice()).toMatch(/^supabase\//));
   });
 
+  it("explains what Tavro does, stores and can't do before anything is connected (spec 11.1)", () => {
+    renderSetup();
+    const about = screen.getByRole("region", { name: "Before you start" });
+    const terms = within(about).getAllByRole("term").map((t) => t.textContent);
+    expect(terms).toEqual(["What it does", "What it stores, and where", "What it can't do", "Demo mode"]);
+    const text = about.textContent ?? "";
+    expect(text).toContain("A Supabase project you own holds each session");
+    expect(text).toContain("which alert types you want");
+    expect(text).toContain("Alert history and this device's preferences stay in this browser");
+    expect(text).toContain("No replies, resume or remote approvals");
+    expect(text).toContain("never contain transcript text");
+    expect(text).toContain("only arrive while Tavro is open");
+    expect(text).toContain("Nothing is sent anywhere");
+    // It comes before both ways in, and changes nothing by being read.
+    const demoCard = screen.getByRole("region", { name: "Explore with demo data" });
+    expect(about.compareDocumentPosition(demoCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(choice()).toBe("none/none");
+  });
+
   it("opens demo mode from the demo card", async () => {
     renderSetup();
     const card = screen.getByRole("region", { name: "Explore with demo data" });

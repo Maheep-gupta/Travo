@@ -44,6 +44,36 @@ export function SetupPage() {
           <p className="muted">See which sessions are working, which need you, and which hosts are offline, from any screen.</p>
         </div>
 
+        {/* Spec 11.1: what Tavro does, collects and can't do, before anything is connected. */}
+        <section className="card onboarding" aria-labelledby="h-about">
+          <h2 id="h-about">Before you start</h2>
+          <dl>
+            <div>
+              <dt>What it does</dt>
+              <dd>A small connector on your computer reports each session's status. Tavro shows it here and alerts you when a session needs you.</dd>
+            </div>
+            <div>
+              <dt>What it stores, and where</dt>
+              <dd>
+                A Supabase project you own holds each session's title, project label, provider, status and reason, last event summary and times, its
+                status history, each host's name, platform, connector version and heartbeat and source-health times, and which alert types you want. Alert
+                history and this device's preferences stay in this browser. Tavro has no servers of its own.
+              </dd>
+            </div>
+            <div>
+              <dt>What it can't do</dt>
+              <dd>
+                No replies, resume or remote approvals. Notifications never contain transcript text, and they only arrive while Tavro is open. Claude Code
+                support is not enabled yet.
+              </dd>
+            </div>
+            <div>
+              <dt>Demo mode</dt>
+              <dd>Simulated sessions, marked Demo, generated in this browser. Nothing is sent anywhere.</dd>
+            </div>
+          </dl>
+        </section>
+
         <section className="card choice" aria-labelledby="h-demo">
           <h2 id="h-demo">Explore with demo data</h2>
           <p className="muted">Runs entirely in this browser with simulated sessions. No account, no network calls, no real Claude data.</p>

@@ -1,8 +1,9 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { OBSERVED_AT_MAX_SKEW_MS, type SessionUpsert } from "@mc/contracts";
 import { describe, expect, it } from "vitest";
-import { Connector, MAX_BACKOFF_MS, backoffDelay } from "../src/connector.js";
+import { Connector, MAX_BACKOFF_MS, SKIPPED_WRITES_LIMIT, backoffDelay } from "../src/connector.js";
 import { loadConfig } from "../src/config.js";
 import { loadCredentials } from "../src/credentials.js";
 import { pairHost } from "../src/pairing.js";
@@ -40,7 +41,7 @@ function session(external_id: string, status: ProviderSession["status"]): Provid
 function setup(opts: { backendUrl?: string; syncTranscripts?: boolean } = {}) {
   let t = Date.parse("2026-10-29T12:00:00Z");
   const provider = new ScriptedProvider();
-  const transport = new MemoryTransport(opts.backendUrl);
+  const transport = new MemoryTransport(opts.backendUrl, () => new Date(t));
   const logs: string[] = [];
   const connector = new Connector({
     provider,
@@ -167,6 +168,67 @@ describe("Connector", () => {
     expect(transport.events.at(-1)?.type).toBe("session_ended");
   });
 
+  it("does not let a delayed older write regress a newer status (schema v3)", async () => {
+    // Two overlapping connector processes for one host, e.g. during a restart.
+    // The stale one's clock is 10s behind, so its writes carry older observations.
+    const transport = new MemoryTransport("memory://local", () => new Date("2026-10-29T12:00:10Z"));
+    const make = (provider: ScriptedProvider, at: () => number, logs: string[]) =>
+      new Connector({ provider, transport, platform: "test", version: "t", remoteControlAllowed: false, syncTranscripts: false, pollMs: 1000, log: (l) => logs.push(l), now: () => new Date(at()) });
+    let tFresh = Date.parse("2026-10-29T12:00:10Z");
+    let tStale = Date.parse("2026-10-29T12:00:00Z");
+    const fresh = new ScriptedProvider();
+    const stale = new ScriptedProvider();
+    const staleLogs: string[] = [];
+    const freshConnector = make(fresh, () => tFresh, []);
+    const staleConnector = make(stale, () => tStale, staleLogs);
+
+    fresh.current = [session("a", "running")];
+    await freshConnector.runOnce();
+    fresh.current = [session("a", "approval_required")];
+    tFresh += 1000;
+    await freshConnector.runOnce();
+
+    stale.current = [session("a", "running")];
+    expect(await staleConnector.runOnce()).toBe(1000);
+    const row = transport.sessions.get("mock:a");
+    expect(row?.status).toBe("approval_required");
+    expect(row?.observed_at).toBe("2026-10-29T12:00:11.000Z");
+    // Skipped silently: no event for the stale observation, and the batch and health stay fine.
+    expect(transport.events.map((e) => `${e.type}:${e.status}`)).toEqual(["session_discovered:running", "status_changed:approval_required"]);
+    expect(staleConnector.connectionState).toBe("online");
+    expect(staleLogs.some((l) => l.startsWith("offline"))).toBe(false);
+
+    // Once its observations are newer, the same connector's writes win again.
+    stale.current = [session("a", "waiting_for_input")];
+    tStale += 20_000;
+    await staleConnector.runOnce();
+    expect(transport.sessions.get("mock:a")?.status).toBe("waiting_for_input");
+    expect(transport.events.at(-1)?.status).toBe("waiting_for_input");
+  });
+
+  it("retries a skipped 'ended' write instead of assuming it landed", async () => {
+    const { provider, transport, connector, advance } = setup();
+    provider.current = [session("a", "running")];
+    await connector.runOnce();
+    // Another writer stored a newer observation for "a" in the meantime.
+    const stored = transport.sessions.get("mock:a");
+    if (!stored) throw new Error("missing row");
+    transport.sessions.set("mock:a", { ...stored, status: "waiting_for_input", observed_at: "2026-10-29T12:00:05.000Z" });
+
+    provider.current = [];
+    advance(1000); // t=1s: older than the stored observation, so skipped
+    await connector.runOnce();
+    expect(transport.sessions.get("mock:a")?.status).toBe("waiting_for_input");
+    expect(transport.events.filter((e) => e.type === "session_ended")).toHaveLength(0);
+
+    advance(5000); // t=6s: newer, so the end is recorded exactly once
+    await connector.runOnce();
+    expect(transport.sessions.get("mock:a")?.status).toBe("ended");
+    advance(1000);
+    await connector.runOnce();
+    expect(transport.events.filter((e) => e.type === "session_ended")).toHaveLength(1);
+  });
+
   it("never grants control capabilities", async () => {
     const { provider, transport, connector } = setup();
     provider.current = [session("a", "running")];
@@ -190,12 +252,130 @@ describe("Connector", () => {
   });
 });
 
+describe("Connector with a clock behind the backend's stored observations", () => {
+  it("reports the source as not responding while its writes keep being skipped, and recovers", async () => {
+    const { provider, transport, connector, logs, advance } = setup();
+    provider.current = [session("a", "running")];
+    await connector.runOnce();
+    // Another writer (or this machine before its clock stepped back) stored a far newer observation.
+    const stored = transport.sessions.get("mock:a");
+    if (!stored) throw new Error("missing row");
+    transport.sessions.set("mock:a", { ...stored, observed_at: "2026-10-29T13:00:00.000Z" });
+
+    for (let i = 0; i < SKIPPED_WRITES_LIMIT; i++) {
+      advance(1000);
+      await connector.runOnce();
+    }
+    expect(transport.heartbeats.map((h) => h.provider_ok)).toEqual([true]);
+    advance(1000);
+    await connector.runOnce(); // health changed: heartbeat sent at once
+    expect(transport.heartbeats.map((h) => h.provider_ok)).toEqual([true, false]);
+    expect(logs.some((l) => l.includes("reporting the source as not responding"))).toBe(true);
+    expect(connector.connectionState).toBe("online"); // the backend itself is fine
+
+    // Writes land again (e.g. the other writer stopped and time caught up).
+    transport.sessions.set("mock:a", { ...stored, observed_at: "2026-10-29T12:00:00.000Z" });
+    advance(1000);
+    await connector.runOnce(); // accepted: counter resets
+    advance(1000);
+    await connector.runOnce();
+    expect(transport.heartbeats.map((h) => h.provider_ok)).toEqual([true, false, true]);
+    expect(logs).toContain("session writes accepted again");
+  });
+
+  it("treats writes that keep failing after a good heartbeat the same way", async () => {
+    const { provider, transport, connector, advance } = setup();
+    provider.current = [session("a", "running")];
+    await connector.runOnce();
+    const upsert = transport.upsertSessions.bind(transport);
+    transport.upsertSessions = async () => {
+      throw new Error("upsert sessions failed (42501)");
+    };
+    // The first failure precedes any heartbeat that cycle; later cycles heartbeat (forced after a failure) then fail.
+    for (let i = 0; i < SKIPPED_WRITES_LIMIT + 2; i++) {
+      advance(1000);
+      await connector.runOnce();
+    }
+    expect(transport.heartbeats.map((h) => h.provider_ok).at(-1)).toBe(false);
+    transport.upsertSessions = upsert;
+    advance(1000);
+    await connector.runOnce();
+    advance(1000);
+    await connector.runOnce();
+    expect(transport.heartbeats.map((h) => h.provider_ok).at(-1)).toBe(true);
+  });
+
+  it("doesn't count a full backend outage against the source", async () => {
+    const { provider, transport, connector, advance } = setup();
+    provider.current = [session("a", "running")];
+    await connector.runOnce();
+    transport.available = false;
+    for (let i = 0; i < SKIPPED_WRITES_LIMIT + 2; i++) {
+      advance(1000);
+      await connector.runOnce();
+    }
+    transport.available = true;
+    advance(1000);
+    await connector.runOnce();
+    expect(transport.heartbeats.map((h) => h.provider_ok)).toEqual([true, true]);
+  });
+});
+
 describe("backoffDelay", () => {
   it("grows exponentially and is capped", () => {
     expect(backoffDelay(1, 1000, () => 0.999)).toBeLessThanOrEqual(1000);
     expect(backoffDelay(4, 1000, () => 0.999)).toBe(7992);
     expect(backoffDelay(50, 1000, () => 0.999)).toBeLessThanOrEqual(MAX_BACKOFF_MS);
     expect(backoffDelay(3, 1000, () => 0)).toBe(1000);
+  });
+});
+
+describe("MemoryTransport stale-write guard (mirrors schema v3)", () => {
+  const dbNow = new Date("2026-10-29T12:00:00Z");
+  const row = (status: SessionUpsert["status"], observed_at: string): SessionUpsert => ({
+    provider: "mock",
+    external_id: "a",
+    title: "a",
+    project_label: null,
+    status,
+    status_reason: null,
+    status_source: "mock",
+    last_activity_at: null,
+    last_event_summary: null,
+    capabilities: ["discover"],
+    is_demo: true,
+    started_at: null,
+    ended_at: null,
+    observed_at,
+  });
+
+  it("keeps the newer observation, applies equal ones idempotently", async () => {
+    const t = new MemoryTransport("memory://local", () => dbNow);
+    const id = (await t.upsertSessions([row("running", "2026-10-29T11:59:50.000Z")])).get("a");
+    expect(id).toBeDefined();
+    expect((await t.upsertSessions([row("failed", "2026-10-29T11:59:40.000Z")])).has("a")).toBe(false); // older: skipped
+    expect(t.sessions.get("mock:a")?.status).toBe("running");
+    expect((await t.upsertSessions([row("running", "2026-10-29T11:59:50.000Z")])).get("a")).toBe(id); // equal: same result
+    expect(t.sessions.get("mock:a")?.status).toBe("running");
+    await t.upsertSessions([row("completed", "2026-10-29T11:59:55.000Z")]); // newer wins
+    expect(t.sessions.get("mock:a")?.status).toBe("completed");
+    expect(t.sessions.size).toBe(1);
+  });
+
+  it("clamps far-future observations so a fast clock cannot pin a session", async () => {
+    const t = new MemoryTransport("memory://local", () => dbNow);
+    await t.upsertSessions([row("running", "2027-01-01T00:00:00.000Z")]);
+    expect(t.sessions.get("mock:a")?.observed_at).toBe(new Date(dbNow.getTime() + OBSERVED_AT_MAX_SKEW_MS).toISOString());
+    // A correct clock catches up after at most the skew window.
+    expect((await t.upsertSessions([row("failed", "2026-10-29T12:04:00.000Z")])).has("a")).toBe(false);
+    expect((await t.upsertSessions([row("failed", "2026-10-29T12:05:00.000Z")])).has("a")).toBe(true);
+    expect(t.sessions.get("mock:a")?.status).toBe("failed");
+  });
+
+  it("rejects the whole batch when an observation time is missing", async () => {
+    const t = new MemoryTransport("memory://local", () => dbNow);
+    await expect(t.upsertSessions([row("running", "2026-10-29T11:59:50.000Z"), row("running", "")])).rejects.toThrow(/23502/);
+    expect(t.sessions.size).toBe(0);
   });
 });
 

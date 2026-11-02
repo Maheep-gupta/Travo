@@ -23,8 +23,13 @@ describe("contracts", () => {
       is_demo: false,
       started_at: null,
       ended_at: null,
+      observed_at: "2026-11-03T10:00:00.000Z",
     };
     expect(SessionUpsert.safeParse(valid).success).toBe(true);
+    // Schema v3: every write carries its observation time.
+    const noObservation = Object.fromEntries(Object.entries(valid).filter(([k]) => k !== "observed_at"));
+    expect(SessionUpsert.safeParse(noObservation).success).toBe(false);
+    expect(SessionUpsert.safeParse({ ...valid, observed_at: "yesterday" }).success).toBe(false);
     expect(SessionUpsert.safeParse({ ...valid, status: "done" }).success).toBe(false);
     expect(SessionUpsert.safeParse({ ...valid, title: "x".repeat(301) }).success).toBe(false);
     expect(SessionUpsert.safeParse({ ...valid, capabilities: ["shell"] }).success).toBe(false);

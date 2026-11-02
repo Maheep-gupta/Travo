@@ -41,7 +41,7 @@ describe("anonymous (publishable key only)", () => {
   it("can read the schema version and nothing else", async () => {
     const anon = anonClient(env);
     const meta = await anon.from("app_meta").select("schema_version").single();
-    expect(meta.data?.schema_version).toBe(1);
+    expect(meta.data?.schema_version).toBe(3);
     for (const table of ["hosts", "sessions", "session_events", "session_messages", "notification_prefs", "host_pairings"]) {
       const r = await anon.from(table).select("*");
       // Either a permission error or zero rows; never data.
@@ -197,6 +197,102 @@ describe("event deduplication", () => {
     expect(up.error).toBeNull();
     const count = await ownerA.client.from("session_events").select("id", { count: "exact", head: true }).eq("dedupe_key", ev.dedupe_key);
     expect(count.count).toBe(1);
+  });
+});
+
+describe("stale-write guard (schema v3)", () => {
+  // Observation times well in the past, so the local stack's clock can't interfere.
+  const at = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
+  const upsert = (row: ReturnType<typeof sessionRow>) =>
+    hostA.client.from("sessions").upsert({ ...row, host_id: hostA.id }, { onConflict: "host_id,provider,external_id" }).select("id, status");
+  const stored = async (ext: string) =>
+    (await ownerA.client.from("sessions").select("status, observed_at, updated_at").eq("external_id", ext).single()).data as
+      | { status: string; observed_at: string; updated_at: string }
+      | null;
+
+  it("skips an older write without an error and without returning the row", async () => {
+    const ext = `stale-${randomUUID()}`;
+    expect((await upsert({ ...sessionRow(ext, at(10)), status: "approval_required" })).error).toBeNull();
+    const before = await stored(ext);
+
+    const late = await upsert({ ...sessionRow(ext, at(20)), status: "running" });
+    expect(late.error).toBeNull(); // the connector's batch must not fail
+    expect(late.data ?? []).toHaveLength(0); // absent from RETURNING, so the connector records no event
+    const patch = await hostA.client.from("sessions").update({ status: "failed", observed_at: at(30) }).eq("external_id", ext).select("id");
+    expect(patch.error).toBeNull();
+    expect(patch.data ?? []).toHaveLength(0);
+    expect(await stored(ext)).toEqual(before); // status, observation time and updated_at untouched
+  });
+
+  it("applies an equal observation idempotently", async () => {
+    const ext = `equal-${randomUUID()}`;
+    const row = { ...sessionRow(ext, at(10)), status: "waiting_for_input" };
+    const first = await upsert(row);
+    const again = await upsert(row);
+    expect(first.error).toBeNull();
+    expect(again.error).toBeNull();
+    expect(again.data?.[0]?.id).toBe(first.data?.[0]?.id);
+    expect((await stored(ext))?.status).toBe("waiting_for_input");
+    const count = await ownerA.client.from("sessions").select("id", { count: "exact", head: true }).eq("external_id", ext);
+    expect(count.count).toBe(1);
+  });
+
+  it("lets a newer observation win", async () => {
+    const ext = `newer-${randomUUID()}`;
+    expect((await upsert(sessionRow(ext, at(10)))).error).toBeNull();
+    const next = await upsert({ ...sessionRow(ext, at(5)), status: "completed" });
+    expect(next.error).toBeNull();
+    expect(next.data).toHaveLength(1);
+    expect((await stored(ext))?.status).toBe("completed");
+  });
+
+  it("clamps far-future observation times to five minutes ahead", async () => {
+    const ext = `future-${randomUUID()}`;
+    const before = Date.now();
+    expect((await upsert(sessionRow(ext, new Date(before + 86_400_000).toISOString()))).error).toBeNull();
+    const clamped = Date.parse((await stored(ext))?.observed_at ?? "");
+    // Allow a little drift between the test process and the database clock.
+    expect(clamped).toBeLessThanOrEqual(Date.now() + 5 * 60_000 + 30_000);
+    expect(clamped).toBeGreaterThan(before + 4 * 60_000);
+    // A second far-future write clamps to a later bound, so the session still updates.
+    const again = await upsert({ ...sessionRow(ext, new Date(before + 86_400_000).toISOString()), status: "failed" });
+    expect(again.error).toBeNull();
+    expect((await stored(ext))?.status).toBe("failed");
+  });
+
+  it("requires an observation time on every write", async () => {
+    const noObservation = Object.fromEntries(Object.entries(sessionRow()).filter(([k]) => k !== "observed_at"));
+    const ins = await hostA.client.from("sessions").insert({ ...noObservation, host_id: hostA.id });
+    expect(ins.error?.code).toBe("23502");
+    const nulled = await hostA.client.from("sessions").update({ observed_at: null }).eq("id", sessionA);
+    expect(nulled.error?.code).toBe("23502"); // not turned into now() + 5 min
+  });
+
+  it("still refuses to move a session even when the write is stale", async () => {
+    const r = await hostA.client.from("sessions").update({ host_id: hostB.id, observed_at: at(60 * 24 * 365) }).eq("id", sessionA);
+    // The trigger itself must refuse it (column grants allow host_id since v3).
+    expect(r.error?.message).toContain("immutable session columns");
+  });
+
+  it("doesn't let another host freeze this host's row with a future observation", async () => {
+    const ext = `cross-${randomUUID()}`;
+    expect((await upsert(sessionRow(ext, at(10)))).error).toBeNull();
+    const future = new Date(Date.now() + 60 * 60_000).toISOString();
+    // Host B targets A's conflict key; RLS must refuse rather than update A's row.
+    const forged = await hostB.client
+      .from("sessions")
+      .upsert({ ...sessionRow(ext, future), host_id: hostA.id }, { onConflict: "host_id,provider,external_id" })
+      .select("id");
+    expect(forged.error).not.toBeNull();
+    expect((await upsert({ ...sessionRow(ext, at(5)), status: "completed" })).data).toHaveLength(1);
+  });
+
+  it("still gives owners no write access, whatever the observation time", async () => {
+    const future = new Date(Date.now() + 60_000).toISOString();
+    const upd = await ownerA.client.from("sessions").update({ status: "failed", observed_at: future }).eq("id", sessionA).select();
+    expect(upd.data ?? []).toHaveLength(0);
+    const ins = await ownerA.client.from("sessions").insert({ ...sessionRow(randomUUID(), future), host_id: hostA.id });
+    expect(ins.error).not.toBeNull();
   });
 });
 

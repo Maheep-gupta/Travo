@@ -2,7 +2,7 @@
 // pages whose markup is still changing: render each in demo mode and assert
 // axe finds nothing. Detailed behaviour lives in each page's own dom test.
 import { useEffect, useState, type ReactNode } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +12,8 @@ import { AlertsProvider } from "./alerts-context.js";
 import { ApiProvider, useApiContext } from "./api-context.js";
 import { DashboardPage } from "./pages/DashboardPage.js";
 import { HostsPage } from "./pages/HostsPage.js";
+import { OfflineBanner } from "./offline-banner.js";
+import { SettingsPage } from "./pages/SettingsPage.js";
 
 vi.mock("./platform.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./platform.js")>();
@@ -90,5 +92,43 @@ describe("axe smoke tests (demo mode)", () => {
     expect(screen.getAllByText("Demo desktop (switched off)").length).toBeGreaterThan(0);
     expect(screen.queryByRole("alert")).toBeNull();
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("Settings (all sections) has no violations", async () => {
+    const { container } = await renderLoaded(<SettingsPage />, "/settings");
+    for (const name of ["Account", "Privacy & data", "Integrations", "Application"]) expect(screen.getByRole("region", { name })).toBeTruthy();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  describe("offline banner", () => {
+    let online = true;
+    const setOnline = (next: boolean) => {
+      online = next;
+      act(() => {
+        window.dispatchEvent(new Event(next ? "online" : "offline"));
+      });
+    };
+    beforeEach(() => {
+      online = true;
+      Object.defineProperty(window.navigator, "onLine", { configurable: true, get: () => online });
+    });
+    afterEach(() => {
+      // TanStack's onlineManager is global: leave it online for later tests.
+      setOnline(true);
+      delete (window.navigator as { onLine?: boolean }).onLine;
+    });
+
+    it("Dashboard with the offline banner showing has no violations", async () => {
+      const { container } = await renderLoaded(
+        <>
+          <OfflineBanner />
+          <DashboardPage />
+        </>,
+        "/",
+      );
+      setOnline(false);
+      expect(screen.getByText(/^Offline — showing data from/)).toBeTruthy();
+      expect(await axe(container)).toHaveNoViolations();
+    });
   });
 });

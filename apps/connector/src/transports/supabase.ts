@@ -66,6 +66,7 @@ export class SupabaseTransport implements Transport {
       .upsert(payload, { onConflict: "host_id,provider,external_id" })
       .select("id, external_id");
     if (error) throw new Error(`upsert sessions failed (${error.code})`);
+    // Rows the stale-write guard skipped (older observed_at) are not returned.
     return new Map((data ?? []).map((r) => [r.external_id as string, r.id as string]));
   }
 

@@ -68,6 +68,15 @@ describe("demo api", () => {
     expect((await laptop())?.provider_error_since).toBeNull();
   });
 
+  it("never lets an older observation overwrite a newer one (schema v3 rule)", async () => {
+    let t = Date.parse("2026-10-29T12:00:00Z");
+    const api = createDemoApi({ tickMs: 0, onlineMs: 10 * 60_000, offlineMs: 60_000, now: () => t });
+    t += 30_000;
+    const newer = (await api.listSessions()).map((s) => `${s.id}:${s.status}:${s.updated_at}`);
+    t -= 10_000; // clock steps back
+    expect((await api.listSessions()).map((s) => `${s.id}:${s.status}:${s.updated_at}`)).toEqual(newer);
+  });
+
   it("refuses pairing in demo mode and requires sign-in", async () => {
     const api = createDemoApi({ tickMs: 0 });
     await expect(api.createHostPairing("x")).rejects.toThrow(/demo mode/);

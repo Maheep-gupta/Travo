@@ -121,3 +121,26 @@ describe("HostsPage summary", () => {
     expect(screen.getByText("1 · last active 3h ago")).toBeTruthy();
   });
 });
+
+describe("HostPage freshness", () => {
+  const healthFresh = () => within(screen.getByRole("region", { name: "Health" })).getByText(/^Updated /).closest(".fresh") as HTMLElement;
+
+  it("shows the last successful update for an online host without a stale marker", async () => {
+    renderAt(`/hosts/${LAPTOP}`);
+    await screen.findByRole("heading", { level: 1, name: "Demo laptop" }, { timeout: 5000 });
+    expect(healthFresh().textContent).toBe("Updated just now");
+  });
+
+  it("marks a switched-off host's data stale, with the reason in text", async () => {
+    renderAt(`/hosts/${DESKTOP}`);
+    await screen.findByRole("heading", { level: 1, name: "Demo desktop (switched off)" }, { timeout: 5000 });
+    expect(healthFresh().textContent).toMatch(/^Updated \d+h ago, Stale: Host offline$/);
+  });
+
+  it("marks data stale while the session source fails", async () => {
+    demo.sourceOutage = true;
+    renderAt(`/hosts/${LAPTOP}`);
+    await screen.findByText(/Can't read its sessions since/, {}, { timeout: 5000 });
+    expect(healthFresh().textContent).toBe("Updated just now, Stale: Source not responding");
+  });
+});

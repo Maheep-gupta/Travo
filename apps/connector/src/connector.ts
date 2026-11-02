@@ -33,6 +33,16 @@ export interface ConnectorOptions {
 
 export const MAX_BACKOFF_MS = 60_000;
 
+/**
+ * Consecutive cycles in which session writes didn't land, although the
+ * heartbeat did, before the heartbeat reports the source as not responding.
+ * Either the backend skipped rows because it holds newer observations (this
+ * machine's clock is behind, or another connector writes for this host), or
+ * the writes failed outright. The host still looks online, so without this the
+ * dashboard would show the frozen statuses as current.
+ */
+export const SKIPPED_WRITES_LIMIT = 3;
+
 /** Exponential backoff with full jitter, capped. `failures` >= 1. */
 export function backoffDelay(failures: number, baseMs: number, random: () => number = Math.random): number {
   const ceiling = Math.min(MAX_BACKOFF_MS, baseMs * 2 ** Math.min(failures - 1, 10));
@@ -54,6 +64,8 @@ export class Connector {
   private providerFailingSince: Date | null = null;
   /** Source health as last reported to the backend; null = not reported yet. */
   private reportedProviderOk: boolean | null = null;
+  private skippedCycles = 0;
+  private heartbeatSentThisCycle = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
   private readonly pollMs: number;
@@ -89,6 +101,10 @@ export class Connector {
       return this.pollMs;
     } catch (e) {
       this.failures += 1;
+      // The heartbeat went through but the writes didn't: the host looks
+      // online while its statuses freeze. A full outage (heartbeat failed) or a
+      // provider failure (already reported) doesn't count.
+      if (!(e instanceof ProviderError) && this.heartbeatSentThisCycle) this.noteUntrustedWrites("failed");
       if (e instanceof ProviderError) {
         // The backend is fine: no forced heartbeat, nothing written, nothing marked ended.
         if (this.state !== "provider_error") {
@@ -110,8 +126,15 @@ export class Connector {
     }
   }
 
+  private noteUntrustedWrites(what: string): void {
+    if (++this.skippedCycles === SKIPPED_WRITES_LIMIT) {
+      this.log(`session writes ${what} ${SKIPPED_WRITES_LIMIT} cycles in a row; reporting the source as not responding (check this machine's clock, or whether another connector runs for this host)`);
+    }
+  }
+
   private async sync(now: Date): Promise<void> {
     const { provider, transport } = this.opts;
+    this.heartbeatSentThisCycle = false;
     if (!this.loadedKnown) {
       this.known = await transport.loadKnownSessions(provider.id);
       this.loadedKnown = true;
@@ -129,7 +152,8 @@ export class Connector {
 
     // Heartbeat on schedule, and immediately when source health changes, so the
     // dashboard stops trusting (or trusts again) this host's statuses within a cycle.
-    const providerOk = providerError === null;
+    const writesTrusted = this.skippedCycles < SKIPPED_WRITES_LIMIT;
+    const providerOk = providerError === null && writesTrusted;
     if (now.getTime() - this.lastHeartbeat >= HEARTBEAT_INTERVAL_MS || providerOk !== this.reportedProviderOk) {
       await transport.heartbeat({
         platform: this.opts.platform,
@@ -139,6 +163,7 @@ export class Connector {
       });
       this.lastHeartbeat = now.getTime();
       this.reportedProviderOk = providerOk;
+      this.heartbeatSentThisCycle = true;
     }
     if (providerError) throw providerError;
     const previous = new Map<string, SessionStatus>([...this.known].map(([k, v]) => [k, v.status]));
@@ -162,14 +187,27 @@ export class Connector {
       is_demo: provider.isDemo,
       started_at: o.started_at,
       ended_at: null,
+      observed_at: now.toISOString(),
     }));
     // Sessions that disappeared are marked ended (never "completed").
+    // Every write carries this cycle's observation time. The backend skips a row
+    // when it already holds a newer observation (e.g. from an overlapping
+    // connector process); such rows are missing from `ids`, so they get no
+    // event, no messages and no `known` update, and the next cycle retries.
     const endedIds = transitions.filter((t) => t.type === "session_ended").map((t) => t.external_id);
     const ids = await transport.upsertSessions(rows);
+    const skipped = rows.filter((r) => !ids.has(r.external_id)).length;
+    if (skipped === 0) {
+      if (!writesTrusted) this.log("session writes accepted again");
+      this.skippedCycles = 0;
+    } else {
+      if (this.skippedCycles === 0) this.log(`backend kept newer observations for ${skipped} session(s); skipped`);
+      this.noteUntrustedWrites("skipped");
+    }
+    const endedApplied: string[] = [];
     for (const externalId of endedIds) {
-      const k = this.known.get(externalId);
-      if (!k) continue;
-      await transport.upsertSessions([
+      if (!this.known.has(externalId)) continue;
+      const kept = await transport.upsertSessions([
         {
           provider: provider.id,
           external_id: externalId,
@@ -184,9 +222,13 @@ export class Connector {
           is_demo: provider.isDemo,
           started_at: null,
           ended_at: now.toISOString(),
+          observed_at: now.toISOString(),
         },
       ]);
-      ids.set(externalId, k.id);
+      const id = kept.get(externalId);
+      if (!id) continue;
+      ids.set(externalId, id);
+      endedApplied.push(externalId);
     }
 
     const events: EventInput[] = [];
@@ -224,7 +266,7 @@ export class Connector {
       const id = ids.get(o.external_id);
       if (id) this.known.set(o.external_id, { id, status: o.status });
     }
-    for (const externalId of endedIds) {
+    for (const externalId of endedApplied) {
       const k = this.known.get(externalId);
       if (k) this.known.set(externalId, { ...k, status: "ended" });
     }

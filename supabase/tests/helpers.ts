@@ -90,7 +90,8 @@ export async function pairHost(env: LocalEnv, owner: Owner): Promise<Host> {
   return { id: creds.host_id, client: await signedIn(env, creds.email, creds.password) };
 }
 
-export function sessionRow(externalId: string = randomUUID()) {
+/** A connector-style session write. `observed_at` is required from schema v3. */
+export function sessionRow(externalId: string = randomUUID(), observed_at: string = new Date().toISOString()) {
   return {
     provider: "mock",
     external_id: externalId,
@@ -105,5 +106,6 @@ export function sessionRow(externalId: string = randomUUID()) {
     is_demo: true,
     started_at: null,
     ended_at: null,
+    observed_at,
   };
 }

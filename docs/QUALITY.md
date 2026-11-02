@@ -6,7 +6,7 @@
 |---|---|---|
 | Type check (strict, all workspaces and DB tests) | `npm run typecheck` | Available |
 | Lint, including the platform-neutrality rules for `@mc/domain` | `npm run lint` | Available |
-| Unit and component tests (vitest "unit" in Node, "dom" in jsdom) | `npm test` | Available. 253 tests as of 2026-11-02, including axe accessibility checks (jsdom; no colour contrast). Component tests use jsdom, not a real browser, so layout, CSS and real notification APIs aren't covered. |
+| Unit and component tests (vitest "unit" in Node, "dom" in jsdom) | `npm test` | Available. 351 tests as of 2026-11-02 (third cycle), including axe accessibility checks (jsdom; no colour contrast). Component tests use jsdom, not a real browser, so layout, CSS and real notification APIs aren't covered. |
 | Production web build | `npm run build -w @mc/web` | Available |
 | Browser checks (65) | `npm run test:e2e` | **Unavailable.** Endpoint protection kills headless Chrome and Edge. |
 | RLS and isolation tests | `npm run test:db` | **Unavailable.** The Docker engine doesn't respond. |
@@ -28,6 +28,10 @@ When reporting results, label each check as **automated** (it ran), **synthetic*
 - Alerts are detected by the open app, so changes that happen while Tavro is closed don't produce alerts. They show up as the current status when you reopen it.
 - Alert detection pauses while the browser reports being offline or a data fetch has failed. If Tavro's own connection drops silently without a failed fetch, a host can still be reported as disconnected.
 - Visual and responsive quality is reviewed from code only. No screenshots can be taken here.
+- The host and session lists are polled every 30 s, including in background tabs, so a dropped Realtime channel can't freeze them. That's one extra read per open tab every 30 s against the user's own Supabase project (fine for a handful of sessions; it counts toward Free-plan egress).
+- A request that hangs without failing keeps the offline banner hidden until the browser gives up, because supabase-js has no request timeout (G13).
+- "Updated X ago" is an upper bound when stale: the last good read was no later than the time shown.
+- Pairing confirmation only waits while the Hosts page is open, and it's judged against the current time even when the client is offline.
 
 ## Serving the production build
 

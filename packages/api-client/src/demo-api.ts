@@ -96,6 +96,7 @@ export function createDemoApi(opts: DemoApiOptions = {}): TavroApi {
   const byExternal = new Map<string, string>(); // external_id -> id
   const events: SessionEventRow[] = [];
   const known = new Map<string, SessionStatus>();
+  let lastObservedAt = Number.NEGATIVE_INFINITY;
   const listeners = new Set<(t: ChangeTopic) => void>();
   const emit = (t: ChangeTopic) => listeners.forEach((l) => l(t));
   const capabilities = [...PROVIDERS.mock.supported];
@@ -141,6 +142,9 @@ export function createDemoApi(opts: DemoApiOptions = {}): TavroApi {
     hosts.set(DEMO_HOST, { ...host, last_seen_at: iso(t), provider_error_since: ok ? null : (host.provider_error_since ?? iso(t)) });
     emit("hosts");
     if (!ok) return; // source "not responding": heartbeat only, sessions untouched
+    // Same rule as the schema v3 guard: an older observation never overwrites a newer one.
+    if (t < lastObservedAt) return;
+    lastObservedAt = t;
 
     const observed = sim.observe();
     const transitions = diffObservations(known, observed, new Date(t));

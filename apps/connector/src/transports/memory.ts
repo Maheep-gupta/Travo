@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { HeartbeatInput, ProviderId, SessionUpsert } from "@mc/contracts";
+import { OBSERVED_AT_MAX_SKEW_MS, type HeartbeatInput, type ProviderId, type SessionUpsert } from "@mc/contracts";
 import type { EventInput, KnownSession, MessageInput, Transport } from "../types.js";
 
 export class TransportUnavailableError extends Error {
@@ -11,7 +11,7 @@ export class TransportUnavailableError extends Error {
 
 /**
  * In-memory transport for the offline demo and tests. `available` can be
- * toggled to simulate network loss.
+ * toggled to simulate network loss. `now` plays the database clock.
  */
 export class MemoryTransport implements Transport {
   readonly backendUrl: string;
@@ -22,7 +22,10 @@ export class MemoryTransport implements Transport {
   readonly messages: MessageInput[] = [];
   private eventId = 0;
 
-  constructor(backendUrl = "memory://local") {
+  constructor(
+    backendUrl = "memory://local",
+    private readonly now: () => Date = () => new Date(),
+  ) {
     this.backendUrl = backendUrl;
   }
 
@@ -42,13 +45,22 @@ export class MemoryTransport implements Transport {
     return out;
   }
 
+  /** Mirrors the schema v3 triggers: observed_at required, clamped, older writes skipped. */
   async upsertSessions(rows: SessionUpsert[]): Promise<Map<string, string>> {
     this.check();
+    const limit = this.now().getTime() + OBSERVED_AT_MAX_SKEW_MS;
+    const bounded = rows.map((row) => {
+      const observed = Date.parse(row.observed_at);
+      if (Number.isNaN(observed)) throw new Error("upsert sessions failed (23502)"); // whole statement fails, like the database
+      return { row, observed: Math.min(observed, limit) };
+    });
     const ids = new Map<string, string>();
-    for (const row of rows) {
+    for (const { row, observed } of bounded) {
       const key = `${row.provider}:${row.external_id}`;
-      const id = this.sessions.get(key)?.id ?? randomUUID();
-      this.sessions.set(key, { ...row, id });
+      const stored = this.sessions.get(key);
+      if (stored && observed < Date.parse(stored.observed_at)) continue; // skipped, absent from the result
+      const id = stored?.id ?? randomUUID();
+      this.sessions.set(key, { ...row, observed_at: new Date(observed).toISOString(), id });
       ids.set(row.external_id, id);
     }
     return ids;

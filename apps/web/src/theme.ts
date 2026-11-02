@@ -3,7 +3,7 @@
 // System sets no attribute and lets the CSS media query follow the OS, so the
 // default needs no JavaScript to avoid a flash. An explicit choice sets
 // data-theme on <html>, which styles.css lets override the media query. The
-// inline script in index.html applies a stored choice before first paint;
+// pre-paint script (public/theme-init.js) applies a stored choice before first paint;
 // main.tsx re-applies it here (theme-color, color-scheme) before React renders.
 import type { KeyValueStorage } from "@mc/api-client/demo";
 
@@ -12,7 +12,7 @@ export type ResolvedTheme = "dark" | "light";
 
 export const THEME_PREFERENCES: readonly ThemePreference[] = ["system", "dark", "light"];
 
-/** Must match the inline script in index.html. */
+/** Must match public/theme-init.js. */
 export const THEME_STORAGE_KEY = "tavro.theme.v1";
 
 /** Browser chrome colours; equal to --bg / --light-bg in styles.css and the metas in index.html. */

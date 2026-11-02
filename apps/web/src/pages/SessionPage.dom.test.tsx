@@ -12,6 +12,7 @@ import { configureAxe } from "vitest-axe";
 import { createDemoApi, type AuthUser, type TavroApi } from "@mc/api-client/demo";
 import type { SessionRow } from "@mc/contracts";
 import { AlertsProvider } from "../alerts-context.js";
+import { alertStorageKey } from "../alert-store.js";
 import { ApiProvider, useApiContext } from "../api-context.js";
 import { SessionPage } from "./SessionPage.js";
 
@@ -193,5 +194,65 @@ describe("SessionPage", () => {
       await within(section("Status history")).findByText(done, {}, { timeout: 5000 });
     }
     expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe("SessionPage freshness, alerts and filters (G4, G7)", () => {
+  it("shows the last successful update separately from last activity", async () => {
+    const { live, stale } = await demoSessions();
+    const view = renderSession(live.id);
+    await heading(live.title ?? live.external_id);
+    const head = detailHead();
+    expect(within(head).getByText("Updated just now")).toBeTruthy();
+    expect(head.textContent).not.toContain("Stale");
+    expect(within(section("Details")).getByText("Last activity")).toBeTruthy();
+    view.unmount();
+
+    renderSession(stale.id);
+    await heading("Nightly data import");
+    const fresh = detailHead().querySelector(".fresh") as HTMLElement;
+    expect(fresh.textContent).toMatch(/^Updated \d+h ago, Stale: Host offline$/);
+  });
+
+  it("lists this session's alerts newest first and links to all alerts", async () => {
+    const { live, stale } = await demoSessions();
+    const user = await demo().getUser();
+    if (!user) throw new Error("demo user missing");
+    const alert = (id: string, sessionId: string | null, kind: string, at: string, read: boolean) => ({ id, kind, sessionId, hostId: live.host_id, at, isDemo: true, read });
+    window.localStorage.setItem(
+      alertStorageKey("demo", user.id),
+      JSON.stringify([
+        alert("a-old", live.id, "waiting_for_input", "2026-11-02T08:00:00.000Z", true),
+        alert("a-other", stale.id, "failed", "2026-11-02T09:30:00.000Z", false),
+        alert("a-host", null, "host_disconnected", "2026-11-02T09:45:00.000Z", false),
+        alert("a-new", live.id, "completed", "2026-11-02T09:00:00.000Z", false),
+      ]),
+    );
+    renderSession(live.id);
+    await heading(live.title ?? live.external_id);
+    const alerts = section("Alerts for this session");
+    const items = within(alerts).getAllByRole("listitem");
+    expect(items.map((li) => li.querySelector(".ra-kind")?.textContent)).toEqual(["Completed", "Waiting for you"]);
+    expect(within(items[0] as HTMLElement).getByText("Unread")).toBeTruthy();
+    expect(within(items[1] as HTMLElement).queryByText("Unread")).toBeNull();
+    expect(within(alerts).getByRole("link", { name: "All alerts" }).getAttribute("href")).toBe("/alerts");
+  });
+
+  it("has an empty state when the session has no alerts", async () => {
+    const { live } = await demoSessions();
+    renderSession(live.id);
+    await heading(live.title ?? live.external_id);
+    const alerts = section("Alerts for this session");
+    expect(within(alerts).getByText(/No alerts for this session/)).toBeTruthy();
+    expect(within(alerts).getByRole("link", { name: "All alerts" })).toBeTruthy();
+  });
+
+  it("links to the dashboard filtered by this session's host and by its provider", async () => {
+    const { live } = await demoSessions();
+    renderSession(live.id);
+    await heading(live.title ?? live.external_id);
+    const filters = screen.getByRole("list", { name: "Find similar sessions" });
+    expect(within(filters).getByRole("link", { name: "All sessions on Demo laptop" }).getAttribute("href")).toBe(`/?host=${live.host_id}`);
+    expect(within(filters).getByRole("link", { name: "All Demo data sessions" }).getAttribute("href")).toBe(`/?provider=${live.provider}`);
   });
 });

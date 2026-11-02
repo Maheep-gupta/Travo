@@ -52,17 +52,29 @@ There's no separate application server. Following the approved BYOS decision (do
 | Short JWT lifetime (15 minutes, `config.toml`) | Realtime caches its permission checks until the token expires | Never |
 | Live updates: Supabase Realtime, used to trigger query refetches | Realtime respects RLS. Data is always re-read through RLS-checked queries rather than trusted from the change payload. | Never |
 
-## Data model (schema v2)
+## Data model (schema v3)
+
+**v3, 2026-11-02: stale-write guard (spec 4.2 "out-of-order updates: newer wins"):**
+- Adds `sessions.observed_at`: when the connector observed the values it writes. Every connector write sends it (`SessionUpsert.observed_at`); clients don't read it, so it isn't in `SessionRow`.
+- `sessions_bound_observed_at` (before insert or update) rejects a null with `23502` and clamps values to `now() + 5 minutes` (`OBSERVED_AT_MAX_SKEW_MS`). A host whose clock runs fast therefore can't pin a session for more than 5 minutes once its clock is corrected.
+- `sessions_guard_update` keeps its v1 immutable-column checks and then **skips** (returns null) an update whose `observed_at` is older than the stored one. No error, no new row version, no Realtime change, and the row is missing from `RETURNING`. Rejecting would fail the connector's whole batch over one late row and make it report the backend as offline.
+- Equal `observed_at` is applied, so an identical retry is a no-op in effect. An update that omits `observed_at` keeps the stored value and so counts as equal; the connector always sends it.
+- Rows that existed before v3 get `-infinity`, so the first v3 write wins.
+- Connector: a row missing from the upsert result gets no event, no messages and no update to its in-memory `known` state, so the next cycle retries with a newer observation. This also covers the derived "ended" write. `MemoryTransport` mirrors the database rule so connector tests exercise it; the browser demo backend skips a sync whose clock is behind the last one.
+- Persistent skipping (or writes failing after a good heartbeat) for 3 cycles makes the connector report its source as not responding (`SKIPPED_WRITES_LIMIT`, D-015), so frozen statuses never look current.
+- v3 grants UPDATE on the conflict-key columns (`host_id`, `provider`, `external_id`) because PostgREST upserts set every payload column; the trigger still rejects any change to them.
+- Where late writes come from: two connector processes for one host overlapping (e.g. during a restart), a request held by a proxy and committed after its retry, or a host clock that stepped back. Within one process writes are sequential, so the guard only matters across those cases.
+- Session events: `(session_id, dedupe_key)` is already unique, and the connector derives keys from the observation time, so a retried or reordered insert can't duplicate a row. Events are a timeline ordered by `occurred_at`, so a late insert lands in its place without changing session status. Not guarded in the database: an event insert is not compared with the session's `observed_at`, so an event delayed in transit after its session write landed is still stored (and can still raise an alert). Two overlapping connector processes whose writes each landed also both record their transitions, under different keys. Accepted: the connector never emits events for skipped writes, and adding the check would put a session lookup on every event insert for a rare case.
+- Clients require exactly v3 (`MIN_SCHEMA_VERSION = MAX_SCHEMA_VERSION = 3`), for the same reason as v2: no project has applied v2 publicly, and a v2 database would fail every connector write (unknown column).
 
 **v2, 2026-11-02:**
 - Adds `hosts.provider_error_since` (session source health).
 - Replaces `host_heartbeat` with a 4-argument version.
-- Clients require exactly v2 (`MIN_SCHEMA_VERSION = MAX_SCHEMA_VERSION = 2`). No project had applied v1, so v1 isn't supported.
 
 **Migration recovery:**
 - There are no down-migrations.
 - On a local project, `npm run db:reset` rebuilds from all migrations.
-- On a user's own project, a failed v2 apply leaves `app_meta.schema_version = 1`. The app then refuses to run, with a "Database needs attention" message, instead of misreading data.
+- On a user's own project, a failed v3 apply leaves `app_meta.schema_version = 2`. The app then refuses to run, with a "Database needs attention" message, instead of misreading data.
 - Unverified: whether the Supabase CLI applies each migration file in one transaction. Check this when Docker works, before relying on it.
 
 Base tables (v1):

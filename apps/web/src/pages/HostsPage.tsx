@@ -1,18 +1,22 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { PairingTicket } from "@mc/contracts";
-import { hostConnectivity, hostSourceOk, relativeTime, summariseByHost, type HostSessionSummary } from "@mc/domain";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { HostRow, PairingTicket } from "@mc/contracts";
+import { hostSourceOk, relativeTime, summariseByHost, type HostSessionSummary } from "@mc/domain";
 import { useApi } from "../api-context.js";
 import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, Notice, PageHeader, SessionListSkeleton } from "../components.js";
-import { useHosts, useNow, useSessionViews } from "../hooks.js";
-import { IconAlert, IconCopy, IconHost } from "../icons.js";
+import { useConnection, useHosts, useNow, useSessionViews, userKey, useUserId } from "../hooks.js";
+import { IconAlert, IconCheck, IconClock, IconCopy, IconHost } from "../icons.js";
+import { buildHostView, pairingPollInterval, pairingStatus, type PairingStatus } from "../view-model.js";
+import { FreshnessNote } from "./DashboardPage.js";
 
 export function HostsPage() {
   const api = useApi();
   const now = useNow();
   const hosts = useHosts();
   const sessions = useSessionViews();
+  const sync = useConnection(now).kind;
+  const hostView = (h: HostRow) => buildHostView(h, now, { sync, fetchedAt: hosts.dataUpdatedAt });
   const summaries = useMemo(() => (sessions.data ? summariseByHost(sessions.data) : null), [sessions.data]);
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
@@ -54,7 +58,7 @@ export function HostsPage() {
     }
   }
 
-  const online = (hosts.data ?? []).filter((h) => hostConnectivity(h, now) === "online").length;
+  const online = (hosts.data ?? []).filter((h) => hostView(h).connectivity === "online").length;
 
   return (
     <main className="page">
@@ -76,7 +80,7 @@ export function HostsPage() {
           </div>
           <ul className="host-list">
             {hosts.data.map((h) => {
-              const c = hostConnectivity(h, now);
+              const { connectivity: c, freshness } = hostView(h);
               return (
                 <li key={h.id} className={`card host-card ${h.revoked_at ? "revoked" : ""}`}>
                   <div className="head">
@@ -96,6 +100,12 @@ export function HostsPage() {
                     <div>
                       <dt>Last seen</dt>
                       <dd title={h.last_seen_at ? new Date(h.last_seen_at).toLocaleString() : undefined}>{relativeTime(h.last_seen_at, now)}</dd>
+                    </div>
+                    <div>
+                      <dt>Last update</dt>
+                      <dd>
+                        <FreshnessNote freshness={freshness} now={now} />
+                      </dd>
                     </div>
                     <div>
                       <dt>Sessions</dt>
@@ -184,6 +194,7 @@ export function HostsPage() {
                 </button>
                 <span className="muted">Expires {new Date(ticket.expires_at).toLocaleTimeString()} · shown once</span>
               </div>
+              <PairingConfirmation ticket={ticket} />
               {/* Announced by the ticket's own status region; a nested live region would double-announce. */}
               <span className={copy === "failed" ? "field-error" : "sr-only"}>
                 {copy === "copied" ? "Command copied to clipboard." : copy === "failed" ? "Couldn't copy automatically. Select the command above and copy it manually." : ""}
@@ -203,3 +214,54 @@ function sessionSummary(summaries: Map<string, HostSessionSummary> | null, loadi
   if (!s) return "None";
   return s.lastActivityAt ? `${s.count} · last active ${relativeTime(s.lastActivityAt, now)}` : String(s.count);
 }
+
+const PAIRING_TEXT: Record<PairingStatus, string> = {
+  waiting: "Waiting for the connector to connect. Run the command above on the laptop; this page checks automatically.",
+  paired: "Code accepted. Waiting for the connector's first heartbeat.",
+  connected: "Connected. The connector is reporting.",
+  stopped: "The connector connected but has stopped reporting. Check that it is still running on the laptop.",
+  expired: "Not connected: the code expired before the connector used it. Create a new code to try again.",
+  revoked: "Not connected: this host was revoked. Create a new code to pair again.",
+};
+
+/**
+ * Spec 11.3: never assume pairing worked. Re-reads the host list (its own
+ * observer on the shared hosts query) until the new host has heartbeated,
+ * and stops polling once there is an answer or the code is long expired.
+ */
+function PairingConfirmation({ ticket }: { ticket: PairingTicket }) {
+  const api = useApi();
+  const userId = useUserId();
+  const now = useNow(PAIRING_CLOCK_MS);
+  const hosts = useQuery({
+    queryKey: userKey(api, userId, "hosts"),
+    queryFn: () => api.listHosts(),
+    refetchInterval: (query) => pairingPollInterval(pairingStatus(ticket, query.state.data?.find((h) => h.id === ticket.host_id), new Date()), ticket, new Date()),
+  });
+  const host = hosts.data?.find((h) => h.id === ticket.host_id);
+  const status = pairingStatus(ticket, host, now);
+  const gaveUp = (status === "waiting" || status === "paired") && pairingPollInterval(status, ticket, now) === false;
+
+  return (
+    <div className={`pairing-state ps-${status}`}>
+      {status === "connected" ? <IconCheck /> : status === "waiting" || status === "paired" ? <IconClock /> : <IconAlert />}
+      <p>
+        {gaveUp ? "Still not connected. Check that the connector is running on the laptop, then check again." : PAIRING_TEXT[status]}
+        {status === "connected" && host && (
+          <>
+            {" "}
+            <Link to={`/hosts/${host.id}`}>View {host.name}</Link>
+          </>
+        )}
+        {hosts.error && !gaveUp && <> Couldn't check just now; retrying.</>}
+      </p>
+      {gaveUp && (
+        <button type="button" className="btn small" onClick={() => void hosts.refetch()}>
+          Check again
+        </button>
+      )}
+    </div>
+  );
+}
+
+const PAIRING_CLOCK_MS = 5_000;

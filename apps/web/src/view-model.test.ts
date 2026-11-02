@@ -7,18 +7,25 @@ import {
   OVERVIEW_STATES,
   STATUS_GROUPS,
   applyDashboardFilter,
+  buildHostView,
   buildSessionViews,
   countByState,
   dashboardFilterParams,
   isDisplayStatus,
   isFiltering,
   isStatusGroup,
+  PAIRING_POLL_GRACE_MS,
+  PAIRING_POLL_MS,
+  pairingPollInterval,
+  pairingStatus,
   parseDashboardFilter,
   prefsEqual,
   projectOptions,
+  sessionAlerts,
+  type ClientState,
   type DashboardFilter,
 } from "./view-model.js";
-import type { DisplayStatus } from "@mc/domain";
+import type { DisplayStatus, StoredAlert } from "@mc/domain";
 
 const now = new Date("2026-10-29T12:00:00Z");
 const host = (id: string, lastSeenAgoMs: number | null): HostRow => ({
@@ -54,6 +61,9 @@ const session = (id: string, hostId: string, status: SessionRow["status"]): Sess
   updated_at: now.toISOString(),
 });
 
+/** A client that fetched both lists just now. */
+const CURRENT: ClientState = { sync: "current", sessionsFetchedAt: now.getTime(), hostsFetchedAt: now.getTime() };
+
 describe("buildSessionViews", () => {
   it("shows sessions on offline or unknown hosts as disconnected, and sorts by attention", () => {
     const views = buildSessionViews(
@@ -65,6 +75,7 @@ describe("buildSessionViews", () => {
       ],
       [host("online", 1000), host("offline", 10 * 60_000)],
       now,
+      CURRENT,
     );
     expect(views.map((v) => [v.id, v.displayStatus])).toEqual([
       ["on-approval", "approval_required"],
@@ -76,12 +87,121 @@ describe("buildSessionViews", () => {
 
   it("never shows a stale stored status behind a host whose session source is failing", () => {
     const failing = { ...host("failing", 1000), provider_error_since: new Date(now.getTime() - 60_000).toISOString() };
-    const views = buildSessionViews([session("a", "failing", "running"), session("b", "failing", "ended")], [failing], now);
+    const views = buildSessionViews([session("a", "failing", "running"), session("b", "failing", "ended")], [failing], now, CURRENT);
     expect(views.map((v) => [v.id, v.displayStatus])).toEqual([
       ["a", "source_unavailable"],
       ["b", "ended"],
     ]);
     expect(countByState(views).byState.source_unavailable).toBe(1);
+  });
+});
+
+describe("session freshness in views", () => {
+  it("marks sessions current only while their host is online with a working source", () => {
+    const failing = { ...host("failing", 1000), provider_error_since: new Date(now.getTime() - 60_000).toISOString() };
+    const views = buildSessionViews(
+      [session("on", "online", "running"), session("off", "offline", "running"), session("bad", "failing", "running"), session("orphan", "missing", "running")],
+      [host("online", 1000), host("offline", 10 * 60_000), failing],
+      now,
+      CURRENT,
+    );
+    const byId = Object.fromEntries(views.map((v) => [v.id, v.freshness]));
+    expect(byId.on).toEqual({ lastReadAt: now.toISOString(), stale: false, reason: "current" });
+    expect(byId.off?.stale).toBe(true);
+    expect(byId.off?.reason).toBe("host_offline");
+    // Never newer than the failure start, even though the row was written later.
+    expect(byId.bad).toEqual({ lastReadAt: failing.provider_error_since, stale: true, reason: "source_failing" });
+    expect(byId.orphan?.reason).toBe("host_unknown");
+  });
+
+  it("goes stale when the session list stopped refreshing, even though the host list is fresh", () => {
+    // A dropped realtime channel or a failing sessions query: the heartbeat says "now", the statuses don't.
+    const sessionsFetchedAt = now.getTime() - 5 * 60_000;
+    const [v] = buildSessionViews([session("a", "online", "running")], [host("online", 1000)], now, { ...CURRENT, sessionsFetchedAt });
+    expect(v?.displayStatus).toBe("running");
+    expect(v?.freshness).toEqual({ lastReadAt: new Date(sessionsFetchedAt).toISOString(), stale: true, reason: "client_not_refreshed" });
+  });
+
+  it("while the client can't refresh, keeps hosts as they were when fetched and blames the client", () => {
+    const fetchedAt = now.getTime() - 10 * 60_000;
+    // Heartbeated 5 s before the last fetch; ten minutes ago by the wall clock.
+    const laptop = host("laptop", 10 * 60_000 + 5_000);
+    for (const sync of ["offline", "unreachable", "stale"] as const) {
+      const [v] = buildSessionViews([session("a", "laptop", "waiting_for_input")], [laptop], now, { sync, sessionsFetchedAt: fetchedAt, hostsFetchedAt: fetchedAt });
+      expect(v?.hostConnectivity).toBe("online");
+      expect(v?.displayStatus).toBe("waiting_for_input");
+      expect(v?.freshness.stale).toBe(true);
+      expect(v?.freshness.reason).toBe(sync === "offline" ? "client_offline" : sync === "unreachable" ? "client_unreachable" : "client_not_refreshed");
+    }
+    // A client that is current still notices the same host going quiet.
+    expect(buildSessionViews([session("a", "laptop", "running")], [laptop], now, CURRENT)[0]?.displayStatus).toBe("disconnected");
+  });
+});
+
+describe("buildHostView", () => {
+  it("judges a host at its fetch time while the client can't refresh, and at now otherwise", () => {
+    const fetchedAt = now.getTime() - 10 * 60_000;
+    const laptop = host("laptop", 10 * 60_000 + 5_000);
+    expect(buildHostView(laptop, now, { sync: "offline", fetchedAt })).toEqual({
+      connectivity: "online",
+      freshness: { lastReadAt: laptop.last_seen_at, stale: true, reason: "client_offline" },
+    });
+    expect(buildHostView(laptop, now, { sync: "current", fetchedAt: now.getTime() }).connectivity).toBe("disconnected");
+    expect(buildHostView(host("fresh", 1000), now, { sync: "current", fetchedAt: now.getTime() }).freshness.reason).toBe("current");
+  });
+});
+
+describe("sessionAlerts", () => {
+  const alert = (id: string, sessionId: string | null, at: string): StoredAlert => ({
+    id,
+    kind: sessionId ? "completed" : "host_disconnected",
+    sessionId,
+    hostId: "h1",
+    at,
+    isDemo: true,
+    read: false,
+  });
+
+  it("keeps only the session's own alerts, newest first", () => {
+    const list = [
+      alert("old", "s1", "2026-10-29T10:00:00Z"),
+      alert("other", "s2", "2026-10-29T11:30:00Z"),
+      alert("host", null, "2026-10-29T11:45:00Z"),
+      alert("new", "s1", "2026-10-29T11:00:00Z"),
+    ];
+    expect(sessionAlerts(list, "s1").map((a) => a.id)).toEqual(["new", "old"]);
+    expect(sessionAlerts(list, "none")).toEqual([]);
+  });
+});
+
+describe("pairing confirmation", () => {
+  const ticket = { expires_at: new Date(now.getTime() + 10 * 60_000).toISOString() };
+  const fresh = (patch: Partial<HostRow>): HostRow => ({ ...host("new", null), ...patch });
+
+  it("only reports connected once the host has heartbeated", () => {
+    expect(pairingStatus(ticket, undefined, now)).toBe("waiting");
+    expect(pairingStatus(ticket, fresh({}), now)).toBe("waiting");
+    expect(pairingStatus(ticket, fresh({ paired_at: now.toISOString() }), now)).toBe("paired");
+    expect(pairingStatus(ticket, fresh({ paired_at: now.toISOString(), last_seen_at: now.toISOString() }), now)).toBe("connected");
+  });
+
+  it("is honest about stopped, expired and revoked hosts", () => {
+    expect(pairingStatus(ticket, host("new", 10 * 60_000), now)).toBe("stopped");
+    const later = new Date(now.getTime() + 11 * 60_000);
+    expect(pairingStatus(ticket, fresh({}), later)).toBe("expired");
+    // A code used in time is not "expired" just because the first heartbeat is late.
+    expect(pairingStatus(ticket, fresh({ paired_at: now.toISOString() }), later)).toBe("paired");
+    expect(pairingStatus(ticket, fresh({ revoked_at: now.toISOString() }), now)).toBe("revoked");
+  });
+
+  it("polls only while waiting, and stops a while after the code expires", () => {
+    expect(pairingPollInterval("waiting", ticket, now)).toBe(PAIRING_POLL_MS);
+    expect(pairingPollInterval("paired", ticket, now)).toBe(PAIRING_POLL_MS);
+    for (const done of ["connected", "stopped", "expired", "revoked"] as const) expect(pairingPollInterval(done, ticket, now)).toBe(false);
+    const expiry = Date.parse(ticket.expires_at);
+    expect(pairingPollInterval("paired", ticket, new Date(expiry + PAIRING_POLL_GRACE_MS))).toBe(PAIRING_POLL_MS);
+    expect(pairingPollInterval("paired", ticket, new Date(expiry + PAIRING_POLL_GRACE_MS + 1))).toBe(false);
+    expect(pairingPollInterval("waiting", { expires_at: "garbage" }, now)).toBe(false);
   });
 });
 
@@ -202,6 +322,7 @@ describe("applyDashboardFilter", () => {
     ],
     [host("h1", 1000), host("h2", 1000)],
     now,
+    CURRENT,
   );
   const ids = (f: Partial<DashboardFilter>) => applyDashboardFilter(views, { ...EMPTY_DASHBOARD_FILTER, ...f }).map((v) => v.id);
 

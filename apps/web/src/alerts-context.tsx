@@ -67,7 +67,9 @@ export function alertHref(alert: Pick<StoredAlert, "sessionId">): string {
  * against the current clock: comparing old data with a new clock (sleep,
  * throttled tab, silently dropped realtime socket) would look like every host
  * disconnecting. The host list is therefore polled once per heartbeat, also in
- * background tabs, so a genuinely silent host is still noticed. Detection
+ * background tabs, so a genuinely silent host is still noticed. The session
+ * list is polled the same way, so a silently dropped realtime channel can't
+ * freeze it (pages share both queries; nothing is fetched twice). Detection
  * pauses (without advancing its snapshot, so nothing is lost) while offline,
  * after a failed fetch, or while preferences are unknown.
  */
@@ -75,7 +77,12 @@ function AlertWatcher({ store, userId }: { store: AlertStore; userId: string }) 
   const api = useApi();
   const navigate = useNavigate();
   // Same keys as the pages (user id included), so the baseline only ever sees this user's data.
-  const sessions = useQuery({ queryKey: userKey(api, userId, "sessions", "list"), queryFn: () => api.listSessions() });
+  const sessions = useQuery({
+    queryKey: userKey(api, userId, "sessions", "list"),
+    queryFn: () => api.listSessions(),
+    refetchInterval: HEARTBEAT_INTERVAL_MS,
+    refetchIntervalInBackground: true,
+  });
   const hosts = useQuery({
     queryKey: userKey(api, userId, "hosts"),
     queryFn: () => api.listHosts(),
