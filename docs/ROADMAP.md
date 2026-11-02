@@ -14,7 +14,7 @@ Users can trust Tavro to tell them what their AI coding sessions are doing and w
 The requirements source is `docs/PRODUCT_SPEC.md`. Status for every requirement is in `docs/GAP_ANALYSIS.md`; the gap numbers (G#) below refer to it.
 
 **Next cycle** (G numbers are in GAP_ANALYSIS; session continuity is in `docs/EXECUTION_STATE.md`):
-1. **G13, reliability edges.** A request timeout for hung fetches: supabase-js has none, so a hung request currently hides the offline banner. Partial-data presentation when one query fails. A sleep/resume test.
+1. **G13, reliability edges.** The request timeout is done (20 s). Still to do: partial-data presentation when one query fails. A sleep/resume test.
 2. **G19, phone-access local preparation.** A `_headers` template, a deployment runbook, a "project paused or unreachable" state and refetch when the page becomes visible. Deployment itself needs authorization (`docs/PHONE_ACCESS.md`).
 3. **G14** unread alerts on the dashboard; **G15** text search.
 4. **G16** collapsing notification bursts; **G17** bundle budget; **G18** moving pure web logic into `@mc/domain`.

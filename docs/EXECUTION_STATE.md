@@ -9,7 +9,7 @@ Continuity between sessions. Update it at the end of every cycle. Requirements a
 - **Branch:** `main`. The local commits are ahead of `origin/main` (public). They are **not pushed**, because a push needs founder authorization (D-017).
 - **Schema:** v3 (`supabase/migrations/20261103000001_stale_write_guard.sql`). Clients require exactly v3.
 - **Gates at the last commit:**
-  - `npm run check` (typecheck, lint and 351 tests) passes.
+  - `npm run check` (typecheck, lint and 355 tests) passes.
   - `npm run build -w @mc/web` passes.
   - `test:db` and `test:e2e` have never run.
 
@@ -43,7 +43,7 @@ Continuity between sessions. Update it at the end of every cycle. Requirements a
 
 ## Next actions (in order)
 
-1. **G13, reliability edges.** Add a fetch timeout to the Supabase client via a custom `fetch` with `AbortSignal.timeout`. Present partial data when one query fails. Add a sleep/resume test.
+1. **G13, reliability edges.** The request timeout is done. Still to do: present partial data when one query fails, and add a sleep/resume test.
 2. **G19, phone-access local preparation.** A `_headers` template, a deployment runbook, a "project paused or unreachable" state, and refetch when the page becomes visible.
 3. **G14, G15, G16, G17, G18, G20.** See `GAP_ANALYSIS.md`.
 

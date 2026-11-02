@@ -49,11 +49,38 @@ function parseRows<T extends z.ZodTypeAny>(schema: T, rows: unknown): z.infer<T>
  */
 export const AUTH_STORAGE_KEY = "tavro.auth";
 
+/**
+ * supabase-js has no request timeout, so a request that hangs without failing
+ * (captive portal, dead proxy, sleeping radio) would keep a query "fetching"
+ * forever and hide the offline banner. Abort after this long; the query then
+ * fails like any network error. Long enough for a slow mobile connection.
+ */
+export const REQUEST_TIMEOUT_MS = 20_000;
+
+type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+/** Wraps fetch so every request is aborted after `ms`, while still honouring the caller's own signal. */
+export function withRequestTimeout(fetchImpl: FetchLike, ms: number = REQUEST_TIMEOUT_MS): FetchLike {
+  return (input, init) => {
+    const controller = new AbortController();
+    const outer = init?.signal;
+    const abortFromOuter = () => controller.abort(outer?.reason);
+    if (outer?.aborted) abortFromOuter();
+    else outer?.addEventListener("abort", abortFromOuter, { once: true });
+    const timer = setTimeout(() => controller.abort(new Error(`Request timed out after ${ms} ms`)), ms);
+    return fetchImpl(input, { ...init, signal: controller.signal }).finally(() => {
+      clearTimeout(timer);
+      outer?.removeEventListener("abort", abortFromOuter);
+    });
+  };
+}
+
 export function createSupabaseApi(config: ConnectionConfig, storage: KeyValueStorage): TavroApi {
   const { url, publishableKey } = ConnectionConfig.parse(config);
   const client: SupabaseClient = createClient(url, publishableKey, {
     // Explicit key so a failed local sign-out can still drop the stored session.
     auth: { storage, storageKey: AUTH_STORAGE_KEY, persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+    global: { fetch: withRequestTimeout((input, init) => fetch(input, init)) },
   });
 
   const toUser = (u: { id: string; email?: string | null } | null | undefined): AuthUser | null =>

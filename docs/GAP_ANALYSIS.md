@@ -3,7 +3,7 @@
 **Requirements source:** `docs/PRODUCT_SPEC.md` v1.0. Requirement IDs are the spec section numbers (D-016).
 **Last updated:** 2026-11-02, third cycle.
 **Owner:** product-manager role; statuses updated by the main session after integrating each cycle.
-**Test baseline:** `npm test` passes 351 tests (unit and dom/jsdom, including axe checks without colour contrast). `test:db` has never run (Docker is blocked), and neither has `test:e2e` (browser automation is blocked).
+**Test baseline:** `npm test` passes 355 tests (unit and dom/jsdom, including axe checks without colour contrast). `test:db` has never run (Docker is blocked), and neither has `test:e2e` (browser automation is blocked).
 
 **Status labels** (spec Part 19):
 - Not started · In progress · Implemented · Automated-test verified · Browser/device verified · Security verified · Production ready
@@ -108,7 +108,8 @@
 ### Reliability (Part 16)
 - **Automated-test verified:** CLI failure, connector silence, connector network loss, duplicates, concurrent tabs, session disappearance, host recovery, app refresh, auth expired, account switching, web offline, out-of-order writes (synthetic), writes skipped or failing while the heartbeat works.
 - **Implemented without a test:** sleep (judged at fetch time), database unavailable (ErrorState).
-- **Not started:** collapsing notification bursts (**G16**), a request timeout for hung fetches (**G13**).
+- **Automated-test verified:** hung requests are aborted after 20 s (`request-timeout.test.ts`).
+- **Not started:** collapsing notification bursts (**G16**).
 
 ### Performance (Part 17)
 | ID | Requirement | Status | Evidence / remaining |
@@ -121,7 +122,7 @@ Done: G1–G12 (G1, G2, G3, G6, G8, G9 and G11 in cycles 1–2; G4, G5, G7, G10 
 
 | # | Gap | Depends on | Notes |
 |---|---|---|---|
-| G13 | Reliability edges: request timeout for hung fetches (supabase-js has none), partial-data presentation, sleep/resume test | — | Spec 3.5, 16 |
+| G13 | Reliability edges: ~~request timeout~~ (done 2026-11-02: `withRequestTimeout`, `request-timeout.test.ts`); partial-data presentation; sleep/resume test | — | Spec 3.5, 16 |
 | G14 | Unread alerts on the dashboard (G6 leftover) | — | Spec 3.5 |
 | G15 | Dashboard text search (title or project) | — | Spec 3.3, directive §5A |
 | G16 | Collapse notification bursts | — | Spec 5.7, 16 |
