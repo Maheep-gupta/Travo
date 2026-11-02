@@ -1,9 +1,10 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { AuthUser } from "@mc/api-client/demo";
 import { useApi, useApiContext } from "../api-context.js";
 import { BrandMark } from "../icons.js";
 
-export function SignInPage({ onSignedIn }: { onSignedIn: (u: AuthUser | null) => void }) {
+/** `notice` is shown inside the page layout, e.g. "Your session expired". */
+export function SignInPage({ onSignedIn, notice }: { onSignedIn: (u: AuthUser | null) => void; notice?: ReactNode }) {
   const api = useApi();
   const { setChoice } = useApiContext();
   const [email, setEmail] = useState("");
@@ -40,6 +41,7 @@ export function SignInPage({ onSignedIn }: { onSignedIn: (u: AuthUser | null) =>
           <span className="eyebrow">Tavro</span>
         </div>
         <h1>Sign in</h1>
+        {notice}
         <form className="card" onSubmit={submit}>
           <label className="field">
             <span>Email</span>

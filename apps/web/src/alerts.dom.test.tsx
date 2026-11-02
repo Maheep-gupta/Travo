@@ -11,6 +11,7 @@ import type { HostRow, NotificationPrefs, PairingTicket, SessionEventRow, Sessio
 import { MAX_SCHEMA_VERSION } from "@mc/contracts/constants";
 import type { TavroAlert } from "@mc/domain";
 import { AlertStore, alertStorageKey } from "./alert-store.js";
+import { userKey } from "./hooks.js";
 import { AlertsProvider, useAlerts } from "./alerts-context.js";
 import { ApiProvider, useApi, useApiContext } from "./api-context.js";
 import { App } from "./App.js";
@@ -182,12 +183,12 @@ describe("AlertWatcher (via AlertsProvider)", () => {
     const a = useApi();
     const client = useQueryClient();
     // Subscribing re-renders this probe in the same batch as the watcher.
-    useQuery({ queryKey: ["sessions", a.kind, "list"], queryFn: () => a.listSessions() });
-    useQuery({ queryKey: ["hosts", a.kind], queryFn: () => a.listHosts() });
-    useQuery({ queryKey: ["prefs", a.kind], queryFn: () => a.getNotificationPrefs() });
-    const sessions = client.getQueryState(["sessions", a.kind, "list"]);
-    const hosts = client.getQueryState(["hosts", a.kind]);
-    const prefs = client.getQueryState(["prefs", a.kind]);
+    useQuery({ queryKey: userKey(a, USER.id, "sessions", "list"), queryFn: () => a.listSessions() });
+    useQuery({ queryKey: userKey(a, USER.id, "hosts"), queryFn: () => a.listHosts() });
+    useQuery({ queryKey: userKey(a, USER.id, "prefs"), queryFn: () => a.getNotificationPrefs() });
+    const sessions = client.getQueryState(userKey(a, USER.id, "sessions", "list"));
+    const hosts = client.getQueryState(userKey(a, USER.id, "hosts"));
+    const prefs = client.getQueryState(userKey(a, USER.id, "prefs"));
     const counts = JSON.stringify({
       s: sessions?.dataUpdateCount ?? 0,
       h: hosts?.dataUpdateCount ?? 0,

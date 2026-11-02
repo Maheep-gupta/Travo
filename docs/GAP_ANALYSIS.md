@@ -3,7 +3,7 @@
 **Requirements source:** `docs/PRODUCT_SPEC.md` v1.0.
 **Last updated:** 2026-11-02.
 **Owner:** the product-manager role. The first pass was done by the product-manager agent from code inspection; the main session then updated statuses after integrating that day's work.
-**Test baseline:** `npm test` passes 170 tests (unit and dom, jsdom). `test:db` has never run (Docker is blocked), and neither has `test:e2e` (browser automation is blocked).
+**Test baseline:** `npm test` passes 253 tests, including axe accessibility checks in jsdom (colour contrast not covered) (unit and dom, jsdom). `test:db` has never run (Docker is blocked), and neither has `test:e2e` (browser automation is blocked).
 
 **Status labels** (spec Part 19):
 - Not started · In progress · Implemented · Automated-test verified · Browser/device verified · Security verified · Production ready
@@ -120,12 +120,12 @@ Not started: auth expired (**G3**), out-of-order updates (**G12**), account swit
 |---|---|---|---|
 | G1 | Source not responding | — | **Done 2026-11-02** (database cases unrun) |
 | G9 | Source alerts | G1 | **Done 2026-11-02** |
-| G2 | Account-switch isolation: user id in every user-data query key; clear on any user change; dom test switching A → B | — | Sequence with G3 and G5 (all touch the `App.tsx` shell) |
-| G3 | Expired auth: map `PGRST301`/401 to `unauthorized`, then sign-in with a notice; unit and dom tests; review the `invalid` message pass-through | — | Same as G2 |
-| G11 | Component and accessibility tests (Dashboard, SessionCard, SessionPage, Hosts, Setup, Sign-in) plus `vitest-axe` | — | Everything (new test files only) |
-| G4 | Visible freshness: "Updated Xm ago", separate from activity; stale marker | G1 ✓ | G8 |
+| G2 | Account-switch isolation | — | **Done 2026-11-02.** User id in every user-data key; cache cleared on any user change; alerts forgotten when the user changes. Tested in `auth.dom.test.tsx`. Security-reviewed 2026-11-02: no high-severity issues. Fixed M1 (a late 401 from another user's query is now ignored), M3 (local sign-out failure drops the stored session) and L2 (only ApiError text is shown). |
+| G3 | Expired auth | — | **Done 2026-11-02.** `toApiError` maps 401 and PGRST301–303 to `unauthorized` with no raw database text (`errors.test.ts`); sign-in page shows an "expired" notice; no retries on `unauthorized`. |
+| G11 | Component and accessibility tests | — | **Done 2026-11-02.** SessionPage, Setup, Sign-in and Settings component tests; axe on every page in jsdom. Found and fixed: Setup inputs that were named twice, and wrong wording for revoked or missing hosts. |
+| G4 | Visible freshness: "Updated Xm ago", separate from activity; stale marker | G1 ✓ | G8 | Host detail | — | **Done 2026-11-02.** `/hosts/:id` with health, identity and sessions; session count and last activity on the Hosts list (`HostPage.dom.test.tsx`). |
 | G5 | Offline banner: "Offline, showing data from HH:MM" | — | after G2/G3 (shell) |
-| G6 | Counts, filters and sorting to spec, with an id tie-break | G1 ✓ | G8, G11 |
+| G6 | Counts, filters and sorting to spec | — | **Done 2026-11-02.** Total plus a count per state; state, host, project and provider filters in the URL; six sort orders with an id tie-break (`domain.test.ts`, `DashboardPage.dom.test.tsx`). Still open: unread alerts on the dashboard. |
 | G7 | Session ↔ alerts link, plus filter by host or provider from a session | — | G6 |
 | G8 | Host detail `/hosts/:id`, with session count and last activity | G1 ✓ | G6 |
 | G10 | Onboarding verification; Settings Account, Privacy, Application and Integrations | Appearance ✓ | G6 |

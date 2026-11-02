@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { ApiError } from "@mc/api-client/demo";
 import { STATUS_LABEL, type DisplayStatus, type HostConnectivity } from "@mc/domain";
 import { IconAlert, IconCheck, IconInbox, IconInfo } from "./icons.js";
 
@@ -76,7 +77,9 @@ export function Notice({ tone = "info", children, role }: { tone?: NoticeTone; c
 export function ErrorState({ error, onRetry }: { error: Error; onRetry?: () => void }) {
   return (
     <Notice tone="error">
-      <p>{error.message || "Something went wrong."}</p>
+      {/* Only ApiError messages are written for users; anything else (e.g. a
+          schema-parse error) could expose field names or values. */}
+      <p>{error instanceof ApiError && error.message ? error.message : "Something went wrong. Try again in a moment."}</p>
       {onRetry && (
         <div className="actions">
           <button type="button" className="btn small" onClick={onRetry}>

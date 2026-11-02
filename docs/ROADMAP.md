@@ -13,19 +13,14 @@ Users can trust Tavro to tell them what their AI coding sessions are doing and w
 
 The requirements source is `docs/PRODUCT_SPEC.md`. Status for every requirement is in `docs/GAP_ANALYSIS.md`; the gap numbers (G#) below refer to it.
 
-**Next cycle, as three parallel workstreams with separate file ownership:**
-1. **G2 and G3, auth isolation and expired sign-in** (one agent: `App.tsx`, `hooks.ts`, `alerts-context.tsx`, query keys, `supabase-api.ts` `toApiError`):
-   - every user-data query key includes the user id, and caches are cleared on any user change;
-   - `PGRST301`/401 map to `unauthorized`, which shows sign-in with a "session expired" notice;
-   - dom tests cover switching user A → B and token expiry.
-2. **G11, component and accessibility tests** (new `*.dom.test.tsx` files only, plus `vitest-axe`): Dashboard, SessionCard, SessionPage, Hosts, Setup and Sign-in. No accessibility violations in demo mode.
-3. **G6 and G8, dashboard counts, filters and sorting to spec, plus host detail** (main session: `view-model.ts`, `DashboardPage.tsx`, `domain/sessions.ts`, `HostsPage.tsx`, new `HostPage.tsx`, routes):
-   - one count per state, including Source unavailable;
-   - host and project filters;
-   - sort options with an id tie-break;
-   - a `/hosts/:id` page.
+**Next cycle:**
+1. **G4, visible freshness.** "Updated Xm ago" (the last successful source read) on cards and on the session and host pages, separate from last activity, with a stale marker. Uses `provider_error_since` and `last_seen_at`.
+2. **G5, offline banner.** Shown when `navigator.onLine` is false or the last successful fetch is over 90 s old. It's announced politely, and sessions aren't presented as live.
+3. **G7, session ↔ alerts.** Related alerts on the session page, with filtering by host or provider from there.
+4. **G10, onboarding and settings completeness.** Setup explains what's collected; pairing waits to confirm the first heartbeat; Account, Privacy, Application and Integrations sections.
+5. **G12, stale-write guard (v3 migration).** Written; its database tests can't run yet.
 
-After that: G4 (visible freshness), G5 (offline banner), G7, G10, G12.
+**Done 2026-11-02 (second cycle):** G2, G3, G6, G8 and G11, plus fixes for the defects the new tests found. 250 tests pass.
 
 **Done 2026-11-02: G1 and G9, session source health (schema v2, D-014).**
 - `hosts.provider_error_since` is written only by the heartbeat.
@@ -161,6 +156,11 @@ See the release checklist in docs/QUALITY.md.
 | Background push | Architecture, cloud and IT approval | M6 |
 
 ## Backlog (unscheduled)
+
+- From the auth security review (2026-11-02):
+  - **M2:** keeping alert history after an expired sign-in is best-effort. With two tabs open, or when auth-js fails a refresh, the history is cleared, which errs on the safe side. Also, A's alert metadata stays in storage if B signs in after A's session expires. Fix: remember the last user id and clear on a different user.
+  - **L1:** a gateway 401 for a rotated publishable key also looks like an expired sign-in.
+  - **L3:** no tests yet for a slow getUser racing an auth event, for multiple tabs, or for alerts kept on expiry.
 
 - Host credentials in the OS credential store instead of a JSON file (SECURITY gap 2).
 - Cleanup Edge Function for revoked host Auth users (SECURITY gap 4).

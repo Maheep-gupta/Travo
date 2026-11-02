@@ -7,6 +7,7 @@ import { DEFAULT_NOTIFICATION_PREFS } from "@mc/contracts/constants";
 import { ALERT_LABEL, HEARTBEAT_INTERVAL_MS, alertAllowed, detectAlerts, hostConnectivity, notificationName, type AlertSnapshot, type StoredAlert } from "@mc/domain";
 import { useApi } from "./api-context.js";
 import { AlertStore, alertStorageKey } from "./alert-store.js";
+import { UserIdContext, userKey } from "./hooks.js";
 import { webStorage } from "./platform.js";
 import { closeSystemNotifications, loadNotificationNamesEnabled, loadSystemNotificationsEnabled, showSystemNotification } from "./system-notifications.js";
 
@@ -16,22 +17,25 @@ export function AlertsProvider({ userId, children }: { userId: string; children:
   const api = useApi();
   const store = useMemo(() => new AlertStore(webStorage, alertStorageKey(api.kind, userId)), [api.kind, userId]);
 
-  // Alert history is per person: on a shared device the next user must not see it.
+  // Alert history is per person: on a shared device the next user must not see
+  // it. A switch straight to another account counts as this user leaving.
   useEffect(
     () =>
       api.onAuthChange((user) => {
-        if (!user) forgetAlerts(store);
+        if (!user || user.id !== userId) forgetAlerts(store);
       }),
-    [api, store],
+    [api, store, userId],
   );
   useEffect(() => store.syncAcrossTabs(window), [store]);
 
   return (
-    <AlertStoreContext.Provider value={store}>
-      {/* Remount (fresh baseline) whenever the backend or user changes. */}
-      <AlertWatcher key={`${api.kind}:${userId}`} store={store} />
-      {children}
-    </AlertStoreContext.Provider>
+    <UserIdContext value={userId}>
+      <AlertStoreContext.Provider value={store}>
+        {/* Remount (fresh baseline) whenever the backend or user changes. */}
+        <AlertWatcher key={`${api.kind}:${userId}`} store={store} userId={userId} />
+        {children}
+      </AlertStoreContext.Provider>
+    </UserIdContext>
   );
 }
 
@@ -67,17 +71,18 @@ export function alertHref(alert: Pick<StoredAlert, "sessionId">): string {
  * pauses (without advancing its snapshot, so nothing is lost) while offline,
  * after a failed fetch, or while preferences are unknown.
  */
-function AlertWatcher({ store }: { store: AlertStore }) {
+function AlertWatcher({ store, userId }: { store: AlertStore; userId: string }) {
   const api = useApi();
   const navigate = useNavigate();
-  const sessions = useQuery({ queryKey: ["sessions", api.kind, "list"], queryFn: () => api.listSessions() });
+  // Same keys as the pages (user id included), so the baseline only ever sees this user's data.
+  const sessions = useQuery({ queryKey: userKey(api, userId, "sessions", "list"), queryFn: () => api.listSessions() });
   const hosts = useQuery({
-    queryKey: ["hosts", api.kind],
+    queryKey: userKey(api, userId, "hosts"),
     queryFn: () => api.listHosts(),
     refetchInterval: HEARTBEAT_INTERVAL_MS,
     refetchIntervalInBackground: true,
   });
-  const prefs = useQuery({ queryKey: ["prefs", api.kind], queryFn: () => api.getNotificationPrefs() });
+  const prefs = useQuery({ queryKey: userKey(api, userId, "prefs"), queryFn: () => api.getNotificationPrefs() });
   const snapshot = useRef<AlertSnapshot | null>(null);
   const [announcement, setAnnouncement] = useState("");
 

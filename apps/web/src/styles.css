@@ -563,3 +563,44 @@ a.env-pill:hover { background: var(--surface-2); }
   :focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
   .switch input { border: 1px solid CanvasText; }
 }
+
+/* Dashboard & host detail */
+/* Primary row: "Need you" and the total, two tiles at every width. */
+.overview.overview-primary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.stat.g-total { --c: var(--accent); }
+/* Secondary row: one compact chip per state, wrapping instead of a wall of tiles. */
+.state-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--sp-2); }
+.state-chip {
+  all: unset; box-sizing: border-box; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--surface);
+  font-size: 0.84rem; font-weight: 500; color: var(--text-2); white-space: nowrap;
+}
+.state-chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: none; }
+.state-chip b { font: 650 0.84rem var(--mono); font-variant-numeric: tabular-nums; color: var(--text); }
+.state-chip.empty, .state-chip.empty b { color: var(--muted); }
+.state-chip:hover { background: var(--surface-2); }
+.state-chip:focus-visible { box-shadow: var(--focus); }
+.state-chip[aria-pressed="true"] { border-color: var(--c); background: var(--cbg); color: var(--text); }
+@media (pointer: coarse) { .state-chip { min-height: 44px; } }
+
+/* Search on its own row on small screens; selects two per row, then one row. */
+.toolbar.dashboard-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.dashboard-toolbar .search { grid-column: 1 / -1; }
+@media (min-width: 720px) { .toolbar.dashboard-toolbar { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (min-width: 1000px) {
+  .toolbar.dashboard-toolbar { grid-template-columns: minmax(0, 1fr) repeat(4, minmax(0, 160px)); }
+  .dashboard-toolbar .search { grid-column: auto; }
+}
+
+.host-card .head h3 a { color: inherit; text-decoration: none; }
+.host-card .head h3 a:hover { text-decoration: underline; }
+.host-detail-grid { display: grid; gap: var(--sp-3); }
+.host-detail-grid .card + .card { margin-top: 0; }
+@media (min-width: 720px) { .host-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; } }
+.host-dashboard-link { margin-top: var(--sp-3); font-size: 0.9rem; }
+
+@media (forced-colors: active) {
+  .state-chip .dot { forced-color-adjust: none; border: 1px solid CanvasText; }
+  .state-chip[aria-pressed="true"] { outline: 2px solid Highlight; }
+}

@@ -60,9 +60,10 @@ export function SetupPage() {
             Your data stays in a project you control.
           </p>
           <label className="field">
-            <span>Project URL</span>
+            <span id="url-label">Project URL</span>
             <input
               ref={inputs.url}
+              aria-labelledby="url-label"
               className="input mono"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
@@ -79,9 +80,10 @@ export function SetupPage() {
             )}
           </label>
           <label className="field">
-            <span>Publishable key</span>
+            <span id="key-label">Publishable key</span>
             <input
               ref={inputs.publishableKey}
+              aria-labelledby="key-label"
               className="input mono"
               value={key}
               onChange={(e) => setKey(e.target.value)}

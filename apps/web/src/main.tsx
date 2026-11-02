@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ApiError } from "@mc/api-client/demo";
 import { BrowserRouter } from "react-router";
 import { ApiProvider } from "./api-context.js";
 import { App } from "./App.js";
@@ -19,7 +20,9 @@ window.addEventListener("storage", (e) => {
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { staleTime: 15_000, retry: 1, refetchOnWindowFocus: true },
+    // One retry for transient failures; never for an expired sign-in, which
+    // retrying can't fix and would only delay the return to the sign-in page.
+    queries: { staleTime: 15_000, retry: (failures, error) => failures < 1 && !(error instanceof ApiError && error.code === "unauthorized"), refetchOnWindowFocus: true },
   },
 });
 

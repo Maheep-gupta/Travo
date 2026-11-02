@@ -8,12 +8,17 @@ import {
   hostConnectivity,
   hostSourceOk,
   isLoopbackUrl,
+  isSessionSort,
   mapClaudeAgentsStatus,
   matchesFilter,
   relativeTime,
+  sortSessions,
+  summariseByHost,
   transcriptContentDecision,
   DISCONNECT_AFTER_MS,
-  type FilterableSession,
+  SESSION_SORTS,
+  type SessionSort,
+  type SortableSession,
 } from "../src/index.js";
 
 const now = new Date("2026-10-29T12:00:00Z");
@@ -126,28 +131,95 @@ describe("diffObservations", () => {
 });
 
 describe("filtering and ordering", () => {
-  const base: FilterableSession = {
+  const base: SortableSession = {
+    id: "s-0",
     displayStatus: "running",
     provider: "claude-code",
+    host_id: "h-1",
+    hostName: "Laptop",
     title: "Refactor billing",
     project_label: "OpkeyStack",
     last_event_summary: null,
     last_activity_at: ago(1000),
   };
-  it("filters by status, provider and search text", () => {
+  it("filters by status, provider, host, project and search text", () => {
     expect(matchesFilter(base, { statuses: ["running"] })).toBe(true);
     expect(matchesFilter(base, { statuses: ["failed"] })).toBe(false);
     expect(matchesFilter(base, { providers: ["mock"] })).toBe(false);
+    expect(matchesFilter(base, { hostIds: ["h-1"] })).toBe(true);
+    expect(matchesFilter(base, { hostIds: ["h-2"] })).toBe(false);
+    expect(matchesFilter(base, { projects: ["OpkeyStack"] })).toBe(true);
+    expect(matchesFilter(base, { projects: ["other"] })).toBe(false);
+    expect(matchesFilter({ ...base, project_label: null }, { projects: ["OpkeyStack"] })).toBe(false);
     expect(matchesFilter(base, { query: "opkey" })).toBe(true);
     expect(matchesFilter(base, { query: "nothing" })).toBe(false);
+    // Filters compose: every given field must match.
+    expect(matchesFilter(base, { statuses: ["running"], hostIds: ["h-1"], projects: ["OpkeyStack"], query: "billing" })).toBe(true);
+    expect(matchesFilter(base, { statuses: ["running"], hostIds: ["h-2"] })).toBe(false);
   });
   it("puts blocked sessions first, then most recent", () => {
-    const list: FilterableSession[] = [
-      { ...base, title: "old-running", last_activity_at: ago(60_000) },
-      { ...base, title: "approval", displayStatus: "approval_required", last_activity_at: ago(500_000) },
-      { ...base, title: "new-running", last_activity_at: ago(1_000) },
+    const list: SortableSession[] = [
+      { ...base, id: "a", title: "old-running", last_activity_at: ago(60_000) },
+      { ...base, id: "b", title: "approval", displayStatus: "approval_required", last_activity_at: ago(500_000) },
+      { ...base, id: "c", title: "new-running", last_activity_at: ago(1_000) },
     ];
     expect(list.sort(compareByAttention).map((s) => s.title)).toEqual(["approval", "new-running", "old-running"]);
+  });
+
+  const list: SortableSession[] = [
+    { ...base, id: "s-run", displayStatus: "running", hostName: "Beta", host_id: "h-2", project_label: "zeta", last_activity_at: ago(30_000) },
+    { ...base, id: "s-done-old", displayStatus: "completed", hostName: "alpha", host_id: "h-1", project_label: null, last_activity_at: ago(90_000) },
+    { ...base, id: "s-wait", displayStatus: "waiting_for_input", hostName: "alpha", host_id: "h-1", project_label: "Api", last_activity_at: ago(60_000) },
+    { ...base, id: "s-done-new", displayStatus: "completed", hostName: "Beta", host_id: "h-2", project_label: "api", last_activity_at: ago(10_000) },
+    { ...base, id: "s-ended", displayStatus: "ended", hostName: "alpha", host_id: "h-1", project_label: "zeta", last_activity_at: null },
+  ];
+  const order = (sort: SessionSort) => sortSessions(list, sort).map((s) => s.id);
+
+  it("supports every spec sort order", () => {
+    expect(order("attention")).toEqual(["s-wait", "s-done-new", "s-done-old", "s-run", "s-ended"]);
+    expect(order("recent")).toEqual(["s-done-new", "s-run", "s-wait", "s-done-old", "s-ended"]);
+    expect(order("working")).toEqual(["s-run", "s-wait", "s-done-new", "s-done-old", "s-ended"]);
+    expect(order("completed")).toEqual(["s-done-new", "s-done-old", "s-ended", "s-run", "s-wait"]);
+    // Host names compare case-insensitively ("alpha" before "Beta"); attention order within a host.
+    expect(order("host")).toEqual(["s-wait", "s-done-old", "s-ended", "s-done-new", "s-run"]);
+    // Sessions without a project go last.
+    expect(order("project")).toEqual(["s-wait", "s-done-new", "s-run", "s-ended", "s-done-old"]);
+  });
+
+  it("does not mutate its input", () => {
+    const before = list.map((s) => s.id);
+    sortSessions(list, "recent");
+    expect(list.map((s) => s.id)).toEqual(before);
+  });
+
+  it("is deterministic when timestamps and labels are equal", () => {
+    const same: SortableSession[] = ["s-3", "s-1", "s-2"].map((id) => ({ ...base, id }));
+    const reversed = [...same].reverse();
+    for (const sort of Object.keys(SESSION_SORTS) as SessionSort[]) {
+      expect(sortSessions(same, sort).map((s) => s.id), sort).toEqual(["s-1", "s-2", "s-3"]);
+      expect(sortSessions(reversed, sort).map((s) => s.id), sort).toEqual(["s-1", "s-2", "s-3"]);
+    }
+  });
+
+  it("recognises only known sort names", () => {
+    expect(isSessionSort("recent")).toBe(true);
+    expect(isSessionSort("toString")).toBe(false);
+    expect(isSessionSort("")).toBe(false);
+    expect(isSessionSort(null)).toBe(false);
+  });
+});
+
+describe("summariseByHost", () => {
+  it("counts sessions and keeps the latest activity per host", () => {
+    const summary = summariseByHost([
+      { host_id: "h-1", last_activity_at: ago(60_000) },
+      { host_id: "h-1", last_activity_at: ago(5_000) },
+      { host_id: "h-1", last_activity_at: null },
+      { host_id: "h-2", last_activity_at: null },
+    ]);
+    expect(summary.get("h-1")).toEqual({ count: 3, lastActivityAt: ago(5_000) });
+    expect(summary.get("h-2")).toEqual({ count: 1, lastActivityAt: null });
+    expect(summary.has("h-3")).toBe(false);
   });
 });
 

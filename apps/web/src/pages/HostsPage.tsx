@@ -1,16 +1,19 @@
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
+import { Link } from "react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { PairingTicket } from "@mc/contracts";
-import { hostConnectivity, hostSourceOk, relativeTime } from "@mc/domain";
+import { hostConnectivity, hostSourceOk, relativeTime, summariseByHost, type HostSessionSummary } from "@mc/domain";
 import { useApi } from "../api-context.js";
 import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, Notice, PageHeader, SessionListSkeleton } from "../components.js";
-import { useHosts, useNow } from "../hooks.js";
+import { useHosts, useNow, useSessionViews } from "../hooks.js";
 import { IconAlert, IconCopy, IconHost } from "../icons.js";
 
 export function HostsPage() {
   const api = useApi();
   const now = useNow();
   const hosts = useHosts();
+  const sessions = useSessionViews();
+  const summaries = useMemo(() => (sessions.data ? summariseByHost(sessions.data) : null), [sessions.data]);
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [ticket, setTicket] = useState<PairingTicket | null>(null);
@@ -78,7 +81,9 @@ export function HostsPage() {
                 <li key={h.id} className={`card host-card ${h.revoked_at ? "revoked" : ""}`}>
                   <div className="head">
                     <IconHost />
-                    <h3>{h.name}</h3>
+                    <h3>
+                      <Link to={`/hosts/${h.id}`}>{h.name}</Link>
+                    </h3>
                     {api.kind === "demo" && <DemoTag />}
                     <ConnectivityBadge connectivity={c} />
                   </div>
@@ -91,6 +96,10 @@ export function HostsPage() {
                     <div>
                       <dt>Last seen</dt>
                       <dd title={h.last_seen_at ? new Date(h.last_seen_at).toLocaleString() : undefined}>{relativeTime(h.last_seen_at, now)}</dd>
+                    </div>
+                    <div>
+                      <dt>Sessions</dt>
+                      <dd>{sessionSummary(summaries, sessions.isLoading, h.id, now)}</dd>
                     </div>
                     <div>
                       <dt>Platform</dt>
@@ -185,4 +194,12 @@ export function HostsPage() {
       </section>
     </main>
   );
+}
+
+/** "3 · last active 5m ago". Session counts load separately from hosts, so say when they're unavailable. */
+function sessionSummary(summaries: Map<string, HostSessionSummary> | null, loading: boolean, hostId: string, now: Date): string {
+  if (!summaries) return loading ? "Loading…" : "Unavailable";
+  const s = summaries.get(hostId);
+  if (!s) return "None";
+  return s.lastActivityAt ? `${s.count} · last active ${relativeTime(s.lastActivityAt, now)}` : String(s.count);
 }

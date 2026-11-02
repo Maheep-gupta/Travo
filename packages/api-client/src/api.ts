@@ -21,7 +21,12 @@ export interface TavroApi {
 
   getUser(): Promise<AuthUser | null>;
   signIn(email: string, password: string): Promise<void>;
-  signOut(): Promise<void>;
+  /**
+   * Ends the session. `localOnly` ends it on this device only (auth-js still
+   * attempts a logout request and ignores 401/403/404); if that fails, the
+   * stored session is removed anyway. Used once the token has expired.
+   */
+  signOut(options?: { localOnly?: boolean }): Promise<void>;
   onAuthChange(cb: (user: AuthUser | null) => void): () => void;
 
   listSessions(): Promise<SessionRow[]>;

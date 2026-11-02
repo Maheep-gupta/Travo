@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router";
 import type { Capability, SessionStatus } from "@mc/contracts";
-import { PROVIDERS, STATUS_LABEL, hasCapability, relativeTime } from "@mc/domain";
+import { PROVIDERS, STATUS_LABEL, hasCapability, relativeTime, type HostConnectivity } from "@mc/domain";
 import { useApi } from "../api-context.js";
 import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, SessionListSkeleton, Spinner, StatusBadge } from "../components.js";
-import { useNow, useSessionViews } from "../hooks.js";
+import { useNow, useSessionViews, userKey, useUserId } from "../hooks.js";
 import { IconArrowLeft, IconCheck, IconFolder, IconHost, IconLock, IconSessions } from "../icons.js";
 
 const CAPABILITY_LABEL: Record<Capability, string> = {
@@ -32,21 +32,35 @@ function formatTime(iso: string | null): string {
 
 const HOLLOW: ReadonlySet<SessionStatus> = new Set(["ended", "unknown"]);
 
+/** Why a "disconnected" session's host can't be trusted; never claims more than is known. */
+export function untrustedHostReason(connectivity: HostConnectivity, hostName: string): string {
+  switch (connectivity) {
+    case "revoked":
+      return `${hostName} was revoked and no longer reports`;
+    case "never_connected":
+      return `${hostName} has never reported`;
+    case "online":
+    case "disconnected":
+      return hostName === "Unknown host" ? "This session's host is no longer listed" : `${hostName} has stopped reporting`;
+  }
+}
+
 export function SessionPage() {
   const { id = "" } = useParams();
   const api = useApi();
+  const userId = useUserId();
   const now = useNow();
   const sessions = useSessionViews();
   const session = sessions.data?.find((s) => s.id === id);
 
   const events = useQuery({
-    queryKey: ["sessions", api.kind, "events", id],
+    queryKey: userKey(api, userId, "sessions", "events", id),
     queryFn: () => api.listEvents(id, 100),
     enabled: Boolean(session),
   });
   const canReadMessages = session ? hasCapability(session.capabilities, "read_messages") : false;
   const messages = useQuery({
-    queryKey: ["sessions", api.kind, "messages", id],
+    queryKey: userKey(api, userId, "sessions", "messages", id),
     queryFn: () => api.listMessages(id, 30),
     enabled: canReadMessages,
   });
@@ -125,7 +139,7 @@ export function SessionPage() {
           </p>
         ) : session.displayStatus === "disconnected" ? (
           <p className="reason">
-            <strong>{session.hostName} has stopped reporting,</strong> so this session's current state is unknown. Last reported:{" "}
+            <strong>{untrustedHostReason(session.hostConnectivity, session.hostName)},</strong> so this session's current state is unknown. Last reported:{" "}
             {STATUS_LABEL[session.status]}.
           </p>
         ) : (

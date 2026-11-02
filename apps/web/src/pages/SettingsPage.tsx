@@ -6,6 +6,7 @@ import type { NotificationPrefs } from "@mc/contracts";
 import { forgetAlerts, useAlertStore } from "../alerts-context.js";
 import { useApi, useApiContext } from "../api-context.js";
 import { ErrorState, Notice, PageHeader, Spinner } from "../components.js";
+import { userKey, useUserId } from "../hooks.js";
 import { IconCheck } from "../icons.js";
 import { webStorage } from "../platform.js";
 import { SystemNotificationsCard } from "../system-notifications-card.js";
@@ -37,7 +38,7 @@ export function SettingsPage() {
   const { choice, setChoice } = useApiContext();
   const alertStore = useAlertStore();
   const queryClient = useQueryClient();
-  const prefsKey = ["prefs", api.kind];
+  const prefsKey = userKey(api, useUserId(), "prefs");
   const prefsQuery = useQuery({ queryKey: prefsKey, queryFn: () => api.getNotificationPrefs() });
   const schema = useQuery({ queryKey: ["schema", api.kind], queryFn: () => api.getSchemaVersion(), staleTime: Infinity });
 
