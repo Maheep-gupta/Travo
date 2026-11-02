@@ -74,7 +74,7 @@
 - No role has a column UPDATE grant for it, and a null health value is rejected.
 - Owners read it like any other column on their own hosts.
 - The UI never shows a stored session status as current while it is set.
-- Test cases are in `supabase/tests/rls.test.ts`, **written, not yet run** (Docker).
+- Test cases are in `supabase/tests/rls.test.ts`, **written, not yet run** (Docker). The same behaviour passes at SQL level (PGlite, `npm run test:sql`, part of `npm test`) on the repository's migrations; still unverified via PostgREST and `test:db`.
 
 **Out-of-order session writes (schema v3, 2026-11-02):**
 - `sessions.observed_at` is required on every write and clamped by trigger to `now() + 5 minutes`, so a host with a wrong clock can't pin its own sessions for longer than that.
@@ -83,6 +83,17 @@
 - v3 also grants UPDATE on `host_id`, `provider` and `external_id`. PostgREST upserts set every payload column on conflict, and without these grants the second upsert of a row would very probably fail with 42501. The trigger rejects any change to them, and `rls.test.ts` asserts the trigger's own error for a forged move. Another host's upsert against this host's conflict key is refused by RLS (test added).
 - If writes keep being skipped, or keep failing after a good heartbeat, the connector reports its source as not responding after 3 cycles (D-015). A host whose clock is behind therefore can't present frozen statuses as current.
 - Test cases are in `supabase/tests/rls.test.ts` ("stale-write guard"), **written, not yet run** (Docker).
+- **SQL level (PGlite, `npm run test:sql`, 2026-11-03):** the stale skip (absent from RETURNING, row unchanged, per-row in a batch), equal-time and omitted-`observed_at` updates, null → 23502, the `now() + 5 min` clamp, the v3 key-column grants under a PostgREST-shaped upsert, the forged-move refusal, the cross-host freeze refusal and the `-infinity` backfill all behave as described, on the repository's migrations including the fix below. Still unverified via PostgREST and `test:db`.
+- **Defect found (2026-11-03, SQL level):** `set_owner_from_host` (v1) references `new.session_id` inside an `if … and not exists (…)` condition. PL/pgSQL resolves every field in an expression before evaluating it, so on `sessions`, which has no `session_id`, every insert fails with `42703 record "new" has no field "session_id"`. Hosts can't create sessions at all. **Fixed** by `supabase/migrations/20261104000001_fix_set_owner_from_host.sql`, which nests the session check in its own `if tg_table_name in (…)` block. Function body only, so the schema version stays 3 (D-021).
+
+## Sign-in sessions on the device (2026-11-03)
+
+- **One stored session per project.** The supabase-js session is stored under `tavro.auth:<project origin and path>` (`authStorageKey`). Before this, one fixed key `tavro.auth` was shared by every project. After **Change backend**, project X's access token could reach project Y, and its refresh token could later be posted to Y's `/auth/v1/token` (security review M1). The legacy key and its `-user` and `-code-verifier` entries are deleted unread on start, so existing users sign in once more.
+- **Change backend** closes the old backend first (`TavroApi.close()`): it removes that project's stored session, tells other tabs, and disconnects Realtime. It sends no logout to either project, because people often switch away from a project that is unreachable or refuses the key. Ending the session on the server is what Sign out is for.
+- **Sign out** always removes the local session, even if auth-js can't load it. It returns `{ serverRevoked }`, and when the project wasn't told, the sign-in page says so. A rejected publishable key gets its own screen, with a local-only Sign out (D-020).
+- **Alert history** is kept when a sign-in ends and cleared on an explicit Sign out or when a different user signs in (last user id per backend, id only). Alert detection skips any rows whose `owner_id` isn't the signed-in user, which covers a refetch with another tab's newer token.
+- **Error codes:** `misconfigured` for a rejected key and `rate_limited` for 429. Neither is retried. Response text is pattern-matched, never shown.
+- **Not verified in a real browser:** cross-tab behaviour, with auth-js's BroadcastChannel and storage.
 
 ## Known gaps and risks
 

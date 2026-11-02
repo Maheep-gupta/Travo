@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { TavroApi } from "@mc/api-client/demo";
 import { createApi, loadBackendChoice, saveBackendChoice, type BackendChoice } from "./platform.js";
@@ -18,10 +18,16 @@ interface ApiContextValue {
 
 const ApiContext = createContext<ApiContextValue | null>(null);
 
+/** How long Change backend waits for the backend being left to finish closing. */
+export const CLOSE_WAIT_MS = 3_000;
+
 export function ApiProvider({ children }: { children: ReactNode }) {
   const [choice, setChoiceState] = useState<BackendChoice | null>(() => loadBackendChoice());
   const [state, setState] = useState<ApiState>(() => (choice ? { status: "loading" } : { status: "none" }));
   const queryClient = useQueryClient();
+  // The backend being left. The next one is created only once it has removed
+  // its stored sign-in, so no session can outlive the switch.
+  const closing = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     if (!choice) {
@@ -30,7 +36,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     }
     let alive = true;
     setState({ status: "loading" });
-    createApi(choice).then(
+    closing.current.then(() => createApi(choice)).then(
       (api) => alive && setState({ status: "ready", api }),
       // Invalid stored settings or a failed chunk download: report, don't crash.
       (e: unknown) =>
@@ -51,6 +57,15 @@ export function ApiProvider({ children }: { children: ReactNode }) {
       state,
       api: state.status === "ready" ? state.api : null,
       setChoice: (next) => {
+        if (state.status === "ready") {
+          const leaving = state.api;
+          // close() removes the stored session first (synchronous web storage), then
+          // signs out locally; that second step can wait on a refresh against an
+          // unreachable project. Per-project keys already stop a session moving
+          // between projects, so don't keep the user on "Starting…" for it.
+          const closed = closing.current.then(() => leaving.close()).catch(() => undefined);
+          closing.current = Promise.race([closed, new Promise<void>((resolve) => setTimeout(resolve, CLOSE_WAIT_MS))]);
+        }
         saveBackendChoice(next);
         queryClient.clear();
         setChoiceState(next);

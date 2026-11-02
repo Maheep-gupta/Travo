@@ -400,7 +400,7 @@ describe("Settings: account", () => {
   });
 
   it("shows the signed-in email for a Supabase account and signs out", async () => {
-    const signOut = vi.fn(() => Promise.resolve());
+    const signOut = vi.fn(() => Promise.resolve({ serverRevoked: true }));
     backend.api = { ...demo, kind: "supabase", getUser: () => demo.getUser().then((u) => u && { ...u, email: "dev@example.com" }), signOut };
     await renderSettings();
     const card = section("Account");

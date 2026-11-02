@@ -6,7 +6,7 @@
 // on/off switch is separate from the browser permission so users can mute
 // Tavro without digging through browser settings.
 import type { KeyValueStorage } from "@mc/api-client/demo";
-import { alertNotificationText, type AlertNotificationNames, type TavroAlert } from "@mc/domain";
+import { alertNotificationText, alertSummaryText, type AlertNotificationNames, type AlertSummary, type TavroAlert } from "@mc/domain";
 
 export type SystemNotificationState = "unsupported" | "default" | "granted" | "denied";
 
@@ -125,6 +125,37 @@ export function showSystemNotification(
     const { title, body } = alertNotificationText(alert, names);
     // Non-identifying tag: OS notification history must not hold session or host ids.
     const n = new api(title, { body, tag: `tavro:${alert.kind}`, icon: "/icon-192.png" });
+    open.add(n);
+    n.onclose = () => open.delete(n);
+    n.onclick = () => {
+      onClick();
+      n.close();
+    };
+    constructionFailed = false;
+    return true;
+  } catch {
+    constructionFailed = true;
+    return false;
+  }
+}
+
+/**
+ * Shows one notification for everything since the user last looked. It
+ * replaces Tavro's open notifications, which the summary counts, so they never
+ * stack up. Counts only, never names (alertSummaryText).
+ * `silent` stops an updated summary from making noise again where supported.
+ */
+export function showSystemSummary(
+  summary: AlertSummary,
+  onClick: () => void,
+  silent: boolean,
+  api: NotificationApi | null = notificationApi(),
+): boolean {
+  if (!api || api.permission !== "granted") return false;
+  closeSystemNotifications();
+  try {
+    const { title, body } = alertSummaryText(summary);
+    const n = new api(title, { body, tag: "tavro:summary", icon: "/icon-192.png", silent });
     open.add(n);
     n.onclose = () => open.delete(n);
     n.onclick = () => {

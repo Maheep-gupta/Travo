@@ -13,6 +13,8 @@
   border-radius: var(--r-md);
 }
 .offline-banner.unreachable, .offline-banner.stale { --c: var(--st-approval); }
+/* A paused project needs its owner to act, so it reads as an error, not a wait. */
+.offline-banner.unreachable.paused { --c: var(--st-failed); }
 .offline-banner > svg { width: 18px; height: 18px; flex: none; margin-top: 2px; color: var(--c); }
 .offline-banner > p { flex: 1; min-width: 0; margin: 0; font-size: 0.9rem; color: var(--text-2); overflow-wrap: anywhere; }
 .offline-banner strong { color: var(--text); font-weight: 600; }

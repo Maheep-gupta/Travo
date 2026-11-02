@@ -7,7 +7,11 @@ export interface AuthUser {
   email: string | null;
 }
 
-export type ChangeTopic = "sessions" | "session_events" | "hosts";
+export interface SignOutResult {
+  serverRevoked: boolean;
+}
+
+export type ChangeTopic ="sessions" | "session_events" | "hosts";
 
 /**
  * The client-side contract used by the web app and, later, the React Native
@@ -25,8 +29,17 @@ export interface TavroApi {
    * Ends the session. `localOnly` ends it on this device only (auth-js still
    * attempts a logout request and ignores 401/403/404); if that fails, the
    * stored session is removed anyway. Used once the token has expired.
+   * The session always ends on this device; `serverRevoked` is false when the
+   * server could not be told, so it may still consider the session active.
    */
-  signOut(options?: { localOnly?: boolean }): Promise<void>;
+  signOut(options?: { localOnly?: boolean }): Promise<SignOutResult>;
+  /**
+   * Leaves this backend (Change backend): removes this device's stored
+   * sign-in for it, tells its other tabs, and stops background work. Sends
+   * nothing anywhere, so a session can never reach another backend. Never
+   * rejects; the instance must not be used afterwards.
+   */
+  close(): Promise<void>;
   onAuthChange(cb: (user: AuthUser | null) => void): () => void;
 
   listSessions(): Promise<SessionRow[]>;
@@ -45,11 +58,18 @@ export interface TavroApi {
   subscribe(cb: (topic: ChangeTopic) => void): () => void;
 }
 
-/** Errors safe to show to users (no secrets, no SQL). */
+/**
+ * Errors safe to show to users (no secrets, no SQL). `misconfigured`: the
+ * backend rejected the app's own key (e.g. a rotated publishable key), which
+ * signing in again cannot fix.
+ */
 export class ApiError extends Error {
   constructor(
     message: string,
-    readonly code: "unauthorized" | "forbidden" | "not_found" | "invalid" | "unavailable" | "unknown",
+    // "unavailable": no answer or a 5xx (network failure, timeout, CORS-blocked
+    // response). "paused": the Supabase project said it is paused (HTTP 540).
+    // "rate_limited": HTTP 429; retrying straight away only prolongs it.
+    readonly code: "unauthorized" | "misconfigured" | "forbidden" | "not_found" | "invalid" | "unavailable" | "paused" | "rate_limited" | "unknown",
   ) {
     super(message);
     this.name = "ApiError";

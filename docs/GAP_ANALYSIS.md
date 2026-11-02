@@ -1,9 +1,9 @@
 # Tavro gap analysis (requirements traceability matrix)
 
 **Requirements source:** `docs/PRODUCT_SPEC.md` v1.0. Requirement IDs are the spec section numbers (D-016).
-**Last updated:** 2026-11-02, third cycle.
+**Last updated:** 2026-11-03, fourth cycle.
 **Owner:** product-manager role; statuses updated by the main session after integrating each cycle.
-**Test baseline:** `npm test` passes 386 tests (unit and dom/jsdom, including axe checks without colour contrast). `test:db` has never run (Docker is blocked), and neither has `test:e2e` (browser automation is blocked).
+**Test baseline:** `npm test` passes 534 tests: unit, dom/jsdom (including axe checks without colour contrast) and 50 SQL-level tests in PGlite (D-021), which are **not** `test:db`. `test:db` has never run (Docker is blocked), and neither has `test:e2e` (browser automation is blocked).
 
 **Status labels** (spec Part 19):
 - Not started · In progress · Implemented · Automated-test verified · Browser/device verified · Security verified · Production ready
@@ -57,7 +57,7 @@
 | 5.5 | Notification center | Automated-test verified | `alerts.dom.test.tsx` "AlertsPage" |
 | 5.6 | System notifications (foreground, opt-in, generic text) | Automated-test verified (synthetic) | Real browsers: Blocked |
 | 5.6 | Session names in notifications (D-013) | Needs founder decision | Built and inactive |
-| 5.7 | Collapse notification bursts | Not started | **G16** |
+| 5.7 / 16 | Collapse notification bursts; no notification storms | Automated-test verified (synthetic) | D-018. `alert-bursts.test.ts`; `alerts.dom.test.tsx` "bursts" and "one system notification for simultaneous alerts"; `alerts.test.ts` summary. Real OS behaviour of `silent` and tag replacement: Blocked (browser). |
 | 5.7 | Background push, quiet hours | Blocked (M6 architecture, cloud and IT approval) | Design in `docs/PHONE_ACCESS.md` §3 |
 
 ### Hosts (Part 6)
@@ -66,7 +66,7 @@
 | 6.1 | Name, connectivity, last seen, platform, version, session count, last activity, last update | Automated-test verified | `HostsPage.dom.test.tsx`, `HostPage.dom.test.tsx` |
 | 6.2 | Connectivity threshold, never connected, revoked, source not responding | Automated-test verified | `domain.test.ts`, `HostPage.dom.test.tsx` |
 | 6.3 | Host detail page | Automated-test verified | `HostPage.dom.test.tsx` |
-| 6.4 | Cross-host isolation | Blocked (Docker) | `rls.test.ts`, which now includes a cross-host upsert case |
+| 6.4 | Cross-host isolation | Automated-test verified at SQL level only (PGlite); `test:db` Blocked (Docker) | `migrations.test.ts` "host isolation"; `rls.test.ts` never run |
 
 ### Claude Code (Part 7)
 | ID | Requirement | Status | Evidence / remaining |
@@ -81,9 +81,9 @@
 ### Accounts, data and security (Parts 9, 10, 15)
 | ID | Requirement | Status | Evidence / remaining |
 |---|---|---|---|
-| 9.1 | Sign-in, sign-out, restore, expired sign-in | Automated-test verified | `auth.dom.test.tsx`, `SignInPage.dom.test.tsx`, `errors.test.ts` |
+| 9.1 | Sign-in, sign-out, restore, expired sign-in; rejected key; races; other tabs | Automated-test verified | D-020. `auth.dom.test.tsx`, `auth-errors.test.ts`, `auth-signout.test.ts`, `local-data.test.ts`, `SignInPage.dom.test.tsx`, `errors.test.ts`. Real multi-tab auth-js behaviour: Blocked (browser). |
 | 9.2 | Isolation in the client (cache keys, alerts, account switch) | Automated-test verified | `auth.dom.test.tsx` |
-| 9.2 | Isolation on the server (RLS, prefs per owner, forged identity) | Blocked (Docker) | `rls.test.ts`, never run |
+| 9.2 | Isolation on the server (RLS, prefs per owner, forged identity) | Automated-test verified **at SQL level only** (PGlite, D-021); `test:db` Blocked (Docker) | `supabase/sql-tests/migrations.test.ts` (48) and `upgrade.test.ts` (2). Not PostgREST, GoTrue or the Edge Function. `rls.test.ts` never run. |
 | 10.2 | Data inventory: what is stored, where, and why | Automated-test verified | Settings "Privacy & data" and Setup "Before you start" (`SettingsPage.dom.test.tsx`, `SetupPage.dom.test.tsx`). Claims checked against code by the security review. |
 | 10.4 | Migration recovery | Implemented (documented) | `ARCHITECTURE.md`; transaction behaviour unverified |
 | 15.2 | Keys, HTTPS, notification content, safe error messages | Automated-test verified | `api-client.test.ts`, `errors.test.ts`, `components.dom.test.tsx`, alerts tests |
@@ -101,15 +101,15 @@
 | 13.3 | Accessibility checks | Automated-test verified (jsdom axe, no contrast) | `a11y.dom.test.tsx` |
 | 13.2/13.3 | Responsive layout, contrast | Implemented (code review) | Blocked (browser) |
 | 14.1 | Manifest, icons, install guidance in the app | Automated-test verified | `SettingsPage.dom.test.tsx` "Application". Installing: Blocked (browser). |
-| 14.2 | Offline indication; cached states never shown as live | Automated-test verified | `offline-banner.dom.test.tsx`, `connectivity.test.ts`, freshness tests |
+| 14.2 / 16 | Offline, unreachable, paused project, refused response and stale data are told apart; cached states never shown as live; bounded retries | Automated-test verified (synthetic) | D-019. `packages/domain/test/connectivity.test.ts`, `availability.test.ts`, `offline-banner.dom.test.tsx`. Whether a real paused project's 540 is readable in a browser (CORS) is *unverified*. |
 | 14.3 | Device testing | Blocked (no deployment, no browser automation) | |
 | 14.4 | Phone access | Needs founder decision | Architecture in `docs/PHONE_ACCESS.md`; provisioning needs authorization |
 
 ### Reliability (Part 16)
 - **Automated-test verified:** CLI failure, connector silence, connector network loss, duplicates, concurrent tabs, session disappearance, host recovery, app refresh, auth expired, account switching, web offline, out-of-order writes (synthetic), writes skipped or failing while the heartbeat works.
-- **Implemented without a test:** sleep (judged at fetch time), database unavailable (ErrorState).
+- **Implemented without a test:** sleep (judged at fetch time).
+- **Automated-test verified (2026-11-03):** database unavailable or paused, with recovery and no retry storm (`offline-banner.dom.test.tsx`); notification storms (D-018).
 - **Automated-test verified:** hung requests are aborted after 20 s (`request-timeout.test.ts`).
-- **Not started:** collapsing notification bursts (**G16**).
 
 ### Performance (Part 17)
 | ID | Requirement | Status | Evidence / remaining |
@@ -125,11 +125,12 @@ Done: G1–G12 (G1, G2, G3, G6, G8, G9 and G11 in cycles 1–2; G4, G5, G7, G10 
 | G13 | Reliability edges: ~~request timeout~~ (done 2026-11-02: `withRequestTimeout`, `request-timeout.test.ts`); partial-data presentation; sleep/resume test | — | Spec 3.5, 16 |
 | G14 | Unread alerts on the dashboard | — | **Done 2026-11-02** |
 | G15 | Dashboard text search | — | **Done 2026-11-02** |
-| G16 | Collapse notification bursts | — | Spec 5.7, 16 |
+| G16 | Collapse notification bursts | — | **Done 2026-11-03** (D-018) |
 | G17 | Bundle budget and build hygiene | — | **Done 2026-11-02** (`check:release`) |
-| G18 | Move pure web logic (`pairingStatus`, `connectivity.ts`) into `@mc/domain` for Expo reuse | — | Maintainability |
-| G19 | Phone-access local preparation | — | **Done 2026-11-02:** `deploy/cloudflare/_headers` (CSP report-only), `docs/DEPLOYMENT.md` runbook, `check:dist`. Still open: a "project paused" message. Deployment itself needs authorization. |
-| G20 | Auth backlog M2, L1, L3 (from the 2026-11-02 security review) | — | See ROADMAP backlog |
+| G18 | Move pure web logic into `@mc/domain` for Expo reuse | — | **Done 2026-11-03:** `connectivity.ts`, `pairing.ts`, `session-views.ts`, `dashboard.ts`, and the per-session alert helpers in `alerts.ts`. URL encoding, copy, theme, storage and the Badging API stay in the web app. |
+| G19 | Phone-access local preparation | — | **Done 2026-11-02:** `deploy/cloudflare/_headers` (CSP report-only), `docs/DEPLOYMENT.md` runbook, `check:dist`. "Project paused" message **done 2026-11-03** (D-019). Deployment itself needs authorization. |
+| G20 | Auth backlog M2, L1, L3 (from the 2026-11-02 security review) | — | **Done 2026-11-03** (D-020), plus the 2026-11-03 review findings |
+| G21 | v1 trigger defect: no host could insert a session (42703) | — | **Fixed 2026-11-03** by migration `20261104000001` (D-021). Found by the PGlite layer. |
 
 ## Founder decisions pending
 1. Licence. The public repo has none, so it's all rights reserved.
@@ -143,4 +144,4 @@ Done: G1–G12 (G1, G2, G3, G6, G8, G9 and G11 in cycles 1–2; G4, G5, G7, G10 
 9. Transcript excerpts: confirm D-004 against spec 4.3.
 10. Open sign-ups in BYOS projects: confirm the guidance to disable them after creating the owner account.
 11. Pushing the local commits to the public repo.
-12. How to run `test:db` before a deployment: on a machine where Docker works (recommended), or against a throwaway hosted project, which needs a helpers change that isn't written (`docs/DEPLOYMENT.md` step 4).
+12. How to run `test:db`: options A–E are compared in `docs/DB_TESTING.md`. Recommended: an approved machine with Docker for the first run (A), then GitHub Actions (B, the inactive template `deploy/ci/db-tests.yml`, which needs push authorization).

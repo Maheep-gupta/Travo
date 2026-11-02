@@ -1,13 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router";
 import type { Capability, SessionStatus } from "@mc/contracts";
-import { ALERT_LABEL, PROVIDERS, STATUS_LABEL, hasCapability, relativeTime, type HostConnectivity } from "@mc/domain";
+import { ALERT_LABEL, EMPTY_DASHBOARD_FILTER, PROVIDERS, STATUS_LABEL, hasCapability, relativeTime, sessionAlerts, untrustedHostReason } from "@mc/domain";
 import { useAlerts } from "../alerts-context.js";
 import { useApi } from "../api-context.js";
 import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, SessionListSkeleton, Spinner, StatusBadge } from "../components.js";
 import { useNow, useSessionViews, userKey, useUserId } from "../hooks.js";
 import { IconArrowLeft, IconBell, IconCheck, IconFolder, IconHost, IconLock, IconSessions } from "../icons.js";
-import { EMPTY_DASHBOARD_FILTER, dashboardFilterParams, sessionAlerts } from "../view-model.js";
+import { dashboardFilterParams } from "../view-model.js";
 import { FreshnessNote } from "./DashboardPage.js";
 
 const CAPABILITY_LABEL: Record<Capability, string> = {
@@ -34,19 +34,6 @@ function formatTime(iso: string | null): string {
 }
 
 const HOLLOW: ReadonlySet<SessionStatus> = new Set(["ended", "unknown"]);
-
-/** Why a "disconnected" session's host can't be trusted; never claims more than is known. */
-export function untrustedHostReason(connectivity: HostConnectivity, hostName: string): string {
-  switch (connectivity) {
-    case "revoked":
-      return `${hostName} was revoked and no longer reports`;
-    case "never_connected":
-      return `${hostName} has never reported`;
-    case "online":
-    case "disconnected":
-      return hostName === "Unknown host" ? "This session's host is no longer listed" : `${hostName} has stopped reporting`;
-  }
-}
 
 export function SessionPage() {
   const { id = "" } = useParams();

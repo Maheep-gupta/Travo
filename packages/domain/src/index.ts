@@ -7,3 +7,8 @@ export * from "./schema-compat.js";
 export * from "./time.js";
 export * from "./alerts.js";
 export * from "./freshness.js";
+export * from "./connectivity.js";
+export * from "./alert-bursts.js";
+export * from "./pairing.js";
+export * from "./session-views.js";
+export * from "./dashboard.js";

@@ -12,7 +12,7 @@ import { createDemoApi, type TavroApi } from "@mc/api-client/demo";
 import type { HostRow, PairingTicket } from "@mc/contracts";
 import { ApiProvider, useApiContext } from "../api-context.js";
 import { UserIdContext } from "../hooks.js";
-import { PAIRING_POLL_GRACE_MS, PAIRING_POLL_MS } from "../view-model.js";
+import { PAIRING_POLL_GRACE_MS, PAIRING_POLL_MS } from "@mc/domain";
 import { HostsPage } from "./HostsPage.js";
 
 const backend = vi.hoisted(() => ({ api: null as TavroApi | null }));

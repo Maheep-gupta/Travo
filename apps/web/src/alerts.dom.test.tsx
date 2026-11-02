@@ -6,7 +6,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useParams } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthUser, ChangeTopic, TavroApi } from "@mc/api-client/demo";
+import type { AuthUser, ChangeTopic, SignOutResult, TavroApi } from "@mc/api-client/demo";
 import type { HostRow, NotificationPrefs, PairingTicket, SessionEventRow, SessionMessageRow, SessionRow, SessionStatus } from "@mc/contracts";
 import { MAX_SCHEMA_VERSION } from "@mc/contracts/constants";
 import type { TavroAlert } from "@mc/domain";
@@ -63,6 +63,8 @@ class FakeApi implements TavroApi {
   sessions: SessionRow[] = [sessionRow(S1, "Fix login", "running"), sessionRow(S2, "Refactor parser", "approval_required")];
   failHosts = false;
   failPrefs = false;
+  /** Whose hosts the backend answers with (another tab's sign-in swaps the shared token). */
+  hostsOwner = USER.id;
   prefs: NotificationPrefs | null = null;
   private readonly authListeners = new Set<(user: AuthUser | null) => void>();
 
@@ -75,8 +77,11 @@ class FakeApi implements TavroApi {
   signIn(): Promise<void> {
     return Promise.reject(new Error("not used"));
   }
-  signOut(): Promise<void> {
+  signOut(): Promise<SignOutResult> {
     return Promise.reject(new Error("not used"));
+  }
+  close(): Promise<void> {
+    return Promise.resolve();
   }
   onAuthChange(cb: (user: AuthUser | null) => void): () => void {
     this.authListeners.add(cb);
@@ -102,7 +107,7 @@ class FakeApi implements TavroApi {
     // Seen just now, so the host counts as online whenever the list is fetched.
     const now = new Date().toISOString();
     return Promise.resolve([
-      { id: HOST, owner_id: USER.id, name: "Test laptop", platform: "simulated", connector_version: "test", remote_control_allowed: false, last_seen_at: now, provider_error_since: null, paired_at: T0, revoked_at: null, created_at: T0 },
+      { id: HOST, owner_id: this.hostsOwner, name: "Test laptop", platform: "simulated", connector_version: "test", remote_control_allowed: false, last_seen_at: now, provider_error_since: null, paired_at: T0, revoked_at: null, created_at: T0 },
     ]);
   }
   createHostPairing(): Promise<PairingTicket> {
@@ -262,6 +267,38 @@ describe("AlertWatcher (via AlertsProvider)", () => {
     expect(storedAlerts()).toHaveLength(1);
   });
 
+  it("shows one system notification for simultaneous alerts while the tab is hidden", async () => {
+    const created: { title: string; options?: NotificationOptions }[] = [];
+    const Fake = Object.assign(
+      function (this: unknown, title: string, options?: NotificationOptions) {
+        created.push({ title, options });
+        return { close: () => undefined };
+      },
+      { permission: "granted" as NotificationPermission, requestPermission: () => Promise.resolve("granted" as NotificationPermission) },
+    );
+    vi.stubGlobal("Notification", Fake);
+    vi.stubGlobal("isSecureContext", true);
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    window.localStorage.setItem("tavro.systemNotifications.v1", "on");
+    try {
+      await initialLoad();
+      api.sessions = [sessionRow(S1, "Fix login", "failed", T1), sessionRow(S2, "Refactor parser", "completed", T1)];
+      await refetch(["sessions"], (b, n) => n.s > b.s);
+      expect(alertIds()).toHaveLength(2);
+      expect(created).toEqual([{ title: "Tavro demo · 2 new alerts", options: expect.objectContaining({ body: "1 failed, 1 completed.", tag: "tavro:summary", silent: false }) }]);
+
+      // A later run in the same burst: an approval is never silent, and the summary counts everything.
+      api.sessions = [sessionRow(S1, "Fix login", "approval_required", "2026-10-29T11:05:00.000Z"), sessionRow(S2, "Refactor parser", "completed", T1)];
+      await refetch(["sessions"], (b, n) => n.s > b.s);
+      expect(created).toHaveLength(2);
+      expect(created[1]).toEqual({ title: "Tavro demo · 3 new alerts", options: expect.objectContaining({ body: "1 needs approval, 1 failed, 1 completed.", silent: false }) });
+    } finally {
+      visibility.mockRestore();
+      vi.unstubAllGlobals();
+      window.localStorage.removeItem("tavro.systemNotifications.v1");
+    }
+  });
+
   it("pauses detection while preferences failed to load, without losing the change", async () => {
     await initialLoad();
 
@@ -293,12 +330,47 @@ describe("AlertWatcher (via AlertsProvider)", () => {
     expect(alertIds()).toEqual([approvalId(T1)]);
   });
 
-  it("clears stored alerts when the user signs out", async () => {
+  // L3: tabs share the stored sign-in, so a sign-in in another tab can make
+  // this tab's queries, still keyed to this user, answer as someone else.
+  it("never baselines or stores alerts from another account's rows, and resumes on this user's", async () => {
+    const OTHER = "00000000-0000-4000-8000-000000000002";
+    await initialLoad();
+
+    api.sessions = [{ ...sessionRow(S1, "Other's session", "failed", T1), owner_id: OTHER }];
+    await refetch(["sessions"], (b, n) => n.s > b.s);
+    expect(alertIds()).toEqual([]);
+    expect(storedAlerts()).toEqual([]);
+
+    api.sessions = [sessionRow(S1, "Fix login", "approval_required", T1), sessionRow(S2, "Refactor parser", "approval_required")];
+    api.hostsOwner = OTHER;
+    await refetch(["hosts"], (b, n) => n.h > b.h);
+    await refetch(["sessions"], (b, n) => n.s > b.s);
+    expect(alertIds()).toEqual([]);
+    expect(storedAlerts()).toEqual([]);
+
+    // Compared with the last snapshot of this user's own data, not the other account's.
+    api.hostsOwner = USER.id;
+    await refetch(["hosts"], (b, n) => n.h > b.h);
+    expect(alertIds()).toEqual([approvalId(T1)]);
+  });
+
+  // M2: auth-js reports expiry, a failed refresh and another tab's sign-out as
+  // the same "signed out" event; the history is kept for the same person's
+  // return. Sign out in Settings and a different user clear it (auth.dom.test).
+  it("keeps stored alerts when the sign-in merely ends", async () => {
     prefillAlerts([{ id: "old-alert", kind: "failed", sessionId: S1, hostId: HOST, at: T0, isDemo: true }]);
     await initialLoad();
     expect(alertIds()).toEqual(["old-alert"]);
 
     act(() => api.emitAuth(null));
+    expect(storedAlerts().map((a) => a.id)).toEqual(["old-alert"]);
+  });
+
+  it("clears stored alerts when a different user signs in", async () => {
+    prefillAlerts([{ id: "old-alert", kind: "failed", sessionId: S1, hostId: HOST, at: T0, isDemo: true }]);
+    await initialLoad();
+
+    act(() => api.emitAuth({ id: "00000000-0000-4000-8000-000000000002", email: null }));
     expect(alertIds()).toEqual([]);
     expect(storedAlerts()).toEqual([]);
   });
@@ -391,6 +463,58 @@ describe("AlertsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Dismiss alert: Failed, Fix login" }));
     expect(alertLinks().map((l) => l.textContent)).toEqual(["Needs approvalRefactor parser (unread)", "Host disconnectedTest laptop"]);
     expect(storedAlerts().map((a) => a.id)).toEqual([approval.id, hostDown.id]);
+  });
+
+  describe("bursts", () => {
+    const done = (id: string, sessionId: string, minute: number): TavroAlert => ({
+      id,
+      kind: "completed",
+      sessionId,
+      hostId: HOST,
+      at: `2026-10-29T12:0${minute}:00.000Z`,
+      isDemo: true,
+    });
+    const burst = [done("d1", S1, 1), done("d2", S2, 2), done("d3", S1, 3)];
+
+    async function renderBurst() {
+      prefillAlerts([...burst, approval], ["d1"]);
+      renderPage();
+      // Names come from live data; wait for them so rows have their final text.
+      await screen.findByRole("link", { name: /Needs approval.*Refactor parser/ }, { timeout: 5000 });
+      return screen.getByRole("button", { name: /^Completed · 3 alerts/ });
+    }
+
+    it("folds related alerts into one row but keeps approvals separate and the unread count exact", async () => {
+      const toggle = await renderBurst();
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(toggle.textContent).toContain("(2 unread)");
+      // The approval is its own row, never folded.
+      expect(alertLinks().map((l) => l.textContent)).toEqual(["Needs approvalRefactor parser (unread)"]);
+      expect(screen.getByRole("heading", { level: 2, name: /3 unread · 4 total/ })).toBeTruthy();
+    });
+
+    it("expands to the individual alerts, each still readable and dismissable on its own", async () => {
+      fireEvent.click(await renderBurst());
+      expect(screen.getByRole("button", { name: /^Completed · 3 alerts/ }).getAttribute("aria-expanded")).toBe("true");
+      expect(alertLinks()).toHaveLength(4);
+
+      // Dismiss the oldest member: the group's id changes, but it stays open.
+      const oldest = screen.getAllByRole("button", { name: "Dismiss alert: Completed, Fix login" }).at(-1);
+      fireEvent.click(oldest as HTMLElement);
+      expect(storedAlerts().map((a) => a.id)).toEqual(["d3", "d2", approval.id]);
+      expect(screen.getByRole("button", { name: /^Completed · 2 alerts/ }).getAttribute("aria-expanded")).toBe("true");
+      expect(alertLinks()).toHaveLength(3);
+    });
+
+    it("marks a whole group read, and dismisses it, in one action", async () => {
+      await renderBurst();
+      fireEvent.click(screen.getByRole("button", { name: "Mark 2 read" }));
+      expect(storedAlerts().filter((a) => a.id.startsWith("d")).every((a) => a.read)).toBe(true);
+      expect(storedAlerts().find((a) => a.id === approval.id)?.read).toBe(false);
+
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss 3 alerts: Completed · 3 alerts, Test laptop" }));
+      expect(storedAlerts().map((a) => a.id)).toEqual([approval.id]);
+    });
   });
 
   it("shows the empty state when there are no alerts", async () => {

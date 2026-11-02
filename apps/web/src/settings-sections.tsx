@@ -1,7 +1,7 @@
 // Settings sections that report rather than configure (spec 12): Account,
 // Privacy and data, Integrations, Application. Every control here does what
 // it says; anything Tavro can't change yet is shown as information instead.
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { MAX_SCHEMA_VERSION } from "@mc/contracts/constants";
 import { MAX_STORED_ALERTS } from "@mc/domain";
@@ -9,7 +9,7 @@ import { forgetAlerts, useAlertStore } from "./alerts-context.js";
 import { useApi, useApiContext } from "./api-context.js";
 import { APP_VERSION, BUILD_MODE, installState, type InstallState } from "./app-info.js";
 import { Notice } from "./components.js";
-import { useUserId } from "./hooks.js";
+import { SignOutReportContext, useUserId } from "./hooks.js";
 import { IconCheck } from "./icons.js";
 import { clearLocalTavroData } from "./local-data.js";
 import { webStorage } from "./platform.js";
@@ -42,6 +42,7 @@ export function AccountCard() {
   const api = useApi();
   const { choice, setChoice } = useApiContext();
   const alertStore = useAlertStore();
+  const reportSignOut = useContext(SignOutReportContext);
   const schema = useQuery({ queryKey: ["schema", api.kind], queryFn: () => api.getSchemaVersion(), staleTime: Infinity });
   const account = useSignedInEmail();
   const [signingOut, setSigningOut] = useState(false);
@@ -52,9 +53,17 @@ export function AccountCard() {
   function signOut() {
     setSigningOut(true);
     setSignOutFailed(false);
-    // On success the auth gate returns to sign-in, which unmounts this card.
+    // The session always ends here, and the auth gate returns to sign-in,
+    // which unmounts this card; it says there if the server wasn't told.
+    // Signing out on purpose also forgets this device's alert history (an
+    // expired sign-in keeps it); other tabs see the cleared list. A rejection
+    // means the session couldn't even be removed here.
     api.signOut().then(
-      () => setSigningOut(false),
+      (result) => {
+        forgetAlerts(alertStore);
+        setSigningOut(false);
+        reportSignOut(result);
+      },
       () => {
         setSigningOut(false);
         setSignOutFailed(true);
@@ -97,7 +106,7 @@ export function AccountCard() {
       {signOutFailed && (
         <div className="settings-note">
           <Notice tone="error">
-            <p>Couldn't sign out. Check your connection and try again.</p>
+            <p>Couldn't sign out on this device. Try again.</p>
           </Notice>
         </div>
       )}
@@ -127,6 +136,7 @@ export function PrivacyCard({ onCleared }: { onCleared: () => void }) {
   const api = useApi();
   const { choice } = useApiContext();
   const alertStore = useAlertStore();
+  const userId = useUserId();
   const [confirming, setConfirming] = useState(false);
   const [cleared, setCleared] = useState(false);
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -148,7 +158,7 @@ export function PrivacyCard({ onCleared }: { onCleared: () => void }) {
   }
 
   function clearNow() {
-    clearLocalTavroData(webStorage, alertStore);
+    clearLocalTavroData(webStorage, alertStore, api.kind, userId);
     applyThemePreference("system", document);
     setCleared(true);
     onCleared();

@@ -1,11 +1,10 @@
 import { Link, useParams } from "react-router";
 import type { HostRow } from "@mc/contracts";
-import { hostSourceOk, relativeTime, type HostConnectivity } from "@mc/domain";
+import { buildHostView, hostSourceOk, relativeTime, type HostConnectivity } from "@mc/domain";
 import { useApi } from "../api-context.js";
 import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, SessionListSkeleton } from "../components.js";
 import { useConnection, useHosts, useNow, useSessionViews } from "../hooks.js";
 import { IconAlert, IconArrowLeft, IconHost } from "../icons.js";
-import { buildHostView } from "../view-model.js";
 import { FreshnessNote, SessionSection } from "./DashboardPage.js";
 
 function formatTime(iso: string | null): string {

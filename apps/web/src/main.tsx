@@ -1,10 +1,10 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ApiError } from "@mc/api-client/demo";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter } from "react-router";
 import { ApiProvider } from "./api-context.js";
 import { App } from "./App.js";
+import { createQueryClient } from "./hooks.js";
 import { webStorage } from "./platform.js";
 import { THEME_STORAGE_KEY, applyThemePreference, loadThemePreference, parseThemePreference } from "./theme.js";
 import "./styles.css";
@@ -18,13 +18,7 @@ window.addEventListener("storage", (e) => {
   if (e.key === THEME_STORAGE_KEY || e.key === null) applyThemePreference(parseThemePreference(e.newValue), document);
 });
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    // One retry for transient failures; never for an expired sign-in, which
-    // retrying can't fix and would only delay the return to the sign-in page.
-    queries: { staleTime: 15_000, retry: (failures, error) => failures < 1 && !(error instanceof ApiError && error.code === "unauthorized"), refetchOnWindowFocus: true },
-  },
-});
+const queryClient = createQueryClient();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("#root missing");

@@ -114,6 +114,11 @@ export const IconClose = (p: P) => (
     <path d="m6.5 6.5 11 11M17.5 6.5l-11 11" />
   </Icon>
 );
+export const IconChevron = (p: P) => (
+  <Icon {...p}>
+    <path d="m6 9 6 6 6-6" />
+  </Icon>
+);
 
 /** Brand mark: a signal ring around a core. */
 export function BrandMark({ className = "brand-mark" }: { className?: string }) {

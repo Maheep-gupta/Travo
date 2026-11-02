@@ -2,12 +2,20 @@ import { useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { HostRow, PairingTicket } from "@mc/contracts";
-import { hostSourceOk, relativeTime, summariseByHost, type HostSessionSummary } from "@mc/domain";
+import {
+  buildHostView,
+  hostSourceOk,
+  pairingPollInterval,
+  pairingStatus,
+  relativeTime,
+  summariseByHost,
+  type HostSessionSummary,
+  type PairingStatus,
+} from "@mc/domain";
 import { useApi } from "../api-context.js";
 import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, Notice, PageHeader, SessionListSkeleton } from "../components.js";
 import { useConnection, useHosts, useNow, useSessionViews, userKey, useUserId } from "../hooks.js";
 import { IconAlert, IconCheck, IconClock, IconCopy, IconHost } from "../icons.js";
-import { buildHostView, pairingPollInterval, pairingStatus, type PairingStatus } from "../view-model.js";
 import { FreshnessNote } from "./DashboardPage.js";
 
 export function HostsPage() {

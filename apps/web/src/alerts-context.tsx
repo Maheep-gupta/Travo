@@ -4,12 +4,23 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyn
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { DEFAULT_NOTIFICATION_PREFS } from "@mc/contracts/constants";
-import { ALERT_LABEL, HEARTBEAT_INTERVAL_MS, alertAllowed, detectAlerts, hostConnectivity, notificationName, type AlertSnapshot, type StoredAlert } from "@mc/domain";
+import {
+  ALERT_LABEL,
+  HEARTBEAT_INTERVAL_MS,
+  alertAllowed,
+  detectAlerts,
+  hostConnectivity,
+  notificationName,
+  planNotifications,
+  type AlertSnapshot,
+  type NotificationBurst,
+  type StoredAlert,
+} from "@mc/domain";
 import { useApi } from "./api-context.js";
 import { AlertStore, alertStorageKey } from "./alert-store.js";
 import { UserIdContext, userKey } from "./hooks.js";
 import { webStorage } from "./platform.js";
-import { closeSystemNotifications, loadNotificationNamesEnabled, loadSystemNotificationsEnabled, showSystemNotification } from "./system-notifications.js";
+import { closeSystemNotifications, loadNotificationNamesEnabled, loadSystemNotificationsEnabled, showSystemNotification, showSystemSummary } from "./system-notifications.js";
 
 const AlertStoreContext = createContext<AlertStore | null>(null);
 
@@ -18,11 +29,16 @@ export function AlertsProvider({ userId, children }: { userId: string; children:
   const store = useMemo(() => new AlertStore(webStorage, alertStorageKey(api.kind, userId)), [api.kind, userId]);
 
   // Alert history is per person: on a shared device the next user must not see
-  // it. A switch straight to another account counts as this user leaving.
+  // it. A switch straight to another account counts as this user leaving. A
+  // sign-in that merely ended (expiry, failed refresh, another tab) keeps the
+  // history for when the same person returns: auth-js can't tell those apart
+  // from Sign out, which clears it itself, and a different user's arrival
+  // removes it (noteSignedInUser). Open system notifications close either way.
   useEffect(
     () =>
       api.onAuthChange((user) => {
-        if (!user || user.id !== userId) forgetAlerts(store);
+        if (!user) closeSystemNotifications();
+        else if (user.id !== userId) forgetAlerts(store);
       }),
     [api, store, userId],
   );
@@ -50,7 +66,7 @@ export function useAlerts(): readonly StoredAlert[] {
   return useSyncExternalStore(store.subscribe, store.getSnapshot);
 }
 
-/** Clears stored alerts and any open system notifications (sign-out, backend change). */
+/** Clears stored alerts and any open system notifications (Sign out, backend change, another user). */
 export function forgetAlerts(store: AlertStore): void {
   store.clear();
   closeSystemNotifications();
@@ -58,6 +74,11 @@ export function forgetAlerts(store: AlertStore): void {
 
 export function alertHref(alert: Pick<StoredAlert, "sessionId">): string {
   return alert.sessionId ? `/sessions/${encodeURIComponent(alert.sessionId)}` : "/hosts";
+}
+
+/** Whether every row belongs to `userId` (rows carry their owner, set by the database). */
+function ownedBy(rows: readonly { owner_id: string }[], userId: string): boolean {
+  return rows.every((r) => r.owner_id === userId);
 }
 
 /**
@@ -71,7 +92,8 @@ export function alertHref(alert: Pick<StoredAlert, "sessionId">): string {
  * list is polled the same way, so a silently dropped realtime channel can't
  * freeze it (pages share both queries; nothing is fetched twice). Detection
  * pauses (without advancing its snapshot, so nothing is lost) while offline,
- * after a failed fetch, or while preferences are unknown.
+ * after a failed fetch, while preferences are unknown, or while the data
+ * belongs to another account.
  */
 function AlertWatcher({ store, userId }: { store: AlertStore; userId: string }) {
   const api = useApi();
@@ -92,10 +114,15 @@ function AlertWatcher({ store, userId }: { store: AlertStore; userId: string }) 
   const prefs = useQuery({ queryKey: userKey(api, userId, "prefs"), queryFn: () => api.getNotificationPrefs() });
   const snapshot = useRef<AlertSnapshot | null>(null);
   const [announcement, setAnnouncement] = useState("");
+  // Alerts notified recently, so a burst becomes one summary (spec 16: no notification storms).
+  const burst = useRef<NotificationBurst | null>(null);
 
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === "visible") closeSystemNotifications();
+      if (document.visibilityState !== "visible") return;
+      closeSystemNotifications();
+      // The user has seen the app; the next alert is news again.
+      burst.current = null;
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
@@ -104,6 +131,10 @@ function AlertWatcher({ store, userId }: { store: AlertStore; userId: string }) 
   useEffect(() => {
     if (!sessions.data || !hosts.data || sessions.error || hosts.error || prefs.isLoading || prefs.error) return;
     if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+    // Tabs share one stored sign-in: one in another tab can swap the token
+    // before this tab hears of it, and answers then belong to that account.
+    // They must never be baselined or stored under this user.
+    if (!ownedBy(sessions.data, userId) || !ownedBy(hosts.data, userId)) return;
     const isDemo = api.kind === "demo";
     const observedAt = new Date(hosts.dataUpdatedAt);
     const result = detectAlerts(
@@ -121,13 +152,24 @@ function AlertWatcher({ store, userId }: { store: AlertStore; userId: string }) 
       const first = added[0];
       if (first) setAnnouncement(added.length === 1 ? `New alert: ${ALERT_LABEL[first.kind]}` : `${added.length} new alerts`);
     } else if (loadSystemNotificationsEnabled(webStorage)) {
-      // Names only if the user opted in on this device (D-013); generic otherwise.
-      const withNames = loadNotificationNamesEnabled(webStorage, store.key);
-      const sessionById = new Map(sessions.data.map((s) => [s.id, s]));
-      const hostById = new Map(hosts.data.map((h) => [h.id, h]));
-      for (const a of added) {
-        const s = a.sessionId ? sessionById.get(a.sessionId) : undefined;
-        const names = withNames ? { session: s ? notificationName(s.title) ?? s.project_label : null, host: hostById.get(a.hostId)?.name ?? null } : undefined;
+      const { plan, burst: next } = planNotifications(burst.current, added, Date.now());
+      burst.current = next;
+      if (plan?.kind === "summary") {
+        // The list is where a burst makes sense; opening it marks nothing read.
+        showSystemSummary(
+          plan.summary,
+          () => {
+            window.focus();
+            void navigate("/alerts");
+          },
+          plan.silent,
+        );
+      } else if (plan?.kind === "single") {
+        const a = plan.alert;
+        // Names only if the user opted in on this device (D-013); generic otherwise.
+        const withNames = loadNotificationNamesEnabled(webStorage, store.key);
+        const s = a.sessionId ? sessions.data.find((x) => x.id === a.sessionId) : undefined;
+        const names = withNames ? { session: s ? notificationName(s.title) ?? s.project_label : null, host: hosts.data.find((h) => h.id === a.hostId)?.name ?? null } : undefined;
         showSystemNotification(
           a,
           () => {
@@ -140,7 +182,7 @@ function AlertWatcher({ store, userId }: { store: AlertStore; userId: string }) 
         );
       }
     }
-  }, [api.kind, sessions.data, sessions.error, hosts.data, hosts.dataUpdatedAt, hosts.error, prefs.data, prefs.isLoading, prefs.error, store, navigate]);
+  }, [api.kind, userId, sessions.data, sessions.error, hosts.data, hosts.dataUpdatedAt, hosts.error, prefs.data, prefs.isLoading, prefs.error, store, navigate]);
 
   return (
     <div className="sr-only" role="status" aria-live="polite">

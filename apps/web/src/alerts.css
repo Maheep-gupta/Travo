@@ -39,3 +39,13 @@
 @media (max-width: 480px) {
   .alert-actions .btn { display: none; } /* Opening an alert marks it read; keep rows compact on phones. */
 }
+
+/* A folded burst (groupAlerts): one row with a toggle; its alerts open beneath it. */
+.group-toggle { border: 0; background: transparent; padding: 0; font: inherit; text-align: left; cursor: pointer; }
+.group-toggle .alert-kind { display: inline-flex; align-items: center; gap: 4px; }
+.group-toggle svg { width: 14px; height: 14px; transition: transform 0.15s; }
+.group-toggle svg.open { transform: rotate(180deg); }
+.group-toggle:hover .alert-name { text-decoration: underline; text-underline-offset: 3px; }
+.alert-group-items { grid-column: 1 / -1; padding-left: var(--sp-3); }
+.alert-group-items .alert-item { background: var(--surface-2); }
+@media (prefers-reduced-motion: reduce) { .group-toggle svg { transition: none; } }

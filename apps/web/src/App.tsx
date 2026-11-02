@@ -1,17 +1,20 @@
 import { Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, NavLink, Navigate, Route, Routes, useLocation } from "react-router";
-import { ApiError, type AuthUser } from "@mc/api-client/demo";
+import { ApiError, type AuthUser, type SignOutResult } from "@mc/api-client/demo";
 import { checkSchemaCompat, unreadCount } from "@mc/domain";
 import { AlertsProvider, useAlerts } from "./alerts-context.js";
 import "./alerts.css";
 import "./shell.css";
 import { useApi, useApiContext, useLiveUpdates } from "./api-context.js";
 import { ErrorState, Notice, Spinner } from "./components.js";
-import { clearUserData } from "./hooks.js";
+import { SignOutReportContext, clearUserData } from "./hooks.js";
 import { BrandMark, IconBell, IconHost, IconSessions, IconSettings } from "./icons.js";
+import { forgetUserLocalData, noteSignedInUser } from "./local-data.js";
 import { OfflineBanner } from "./offline-banner.js";
 import { PageErrorBoundary, retryableLazy } from "./page-loading.js";
+import { webStorage } from "./platform.js";
+import { closeSystemNotifications } from "./system-notifications.js";
 import { BASE_TITLE, titleWithUnread, updateAppBadge } from "./unread-indicator.js";
 import { DashboardPage } from "./pages/DashboardPage.js";
 
@@ -61,6 +64,11 @@ function AuthGate() {
   const api = useApi();
   const [user, setUserState] = useState<AuthUser | null | undefined>(undefined);
   const [expired, setExpired] = useState(false);
+  // The project refused the publishable key: signing in again can't fix that.
+  const [keyRejected, setKeyRejected] = useState<ApiError | null>(null);
+  // An explicit sign-out ended the session here but the server wasn't told.
+  const [serverNotTold, setServerNotTold] = useState(false);
+  const [signOutFailed, setSignOutFailed] = useState(false);
   const queryClient = useQueryClient();
   // The user the cache belongs to, readable synchronously from the listeners below.
   const current = useRef<AuthUser | null | undefined>(undefined);
@@ -72,12 +80,23 @@ function AuthGate() {
       // swap, a sign-in in another tab), so the next user never sees them or
       // is baselined against them.
       const prev = current.current;
-      if (prev && prev.id !== next?.id) clearUserData(queryClient);
+      if (prev && prev.id !== next?.id) {
+        clearUserData(queryClient);
+        closeSystemNotifications();
+        // Re-detected by the next user's first query if the key is still refused.
+        setKeyRejected(null);
+      }
       current.current = next;
-      if (next) setExpired(false);
+      if (next) {
+        // A different person than last time: forget the previous one's local
+        // alert history before anything of the new user mounts.
+        noteSignedInUser(webStorage, api.kind, next.id);
+        setExpired(false);
+        setServerNotTold(false);
+      }
       setUserState(next);
     },
-    [queryClient],
+    [api.kind, queryClient],
   );
 
   useEffect(() => {
@@ -99,7 +118,9 @@ function AuthGate() {
   // Errors from another user's queries (e.g. a late 401 after switching
   // accounts) are ignored, and so are mutations: they are not keyed by user,
   // and an expired session is caught by the next query anyway. Only acts while
-  // signed in, so failures still in flight afterwards cannot repeat it.
+  // signed in, so failures still in flight afterwards cannot repeat it. A
+  // rejected publishable key is not an expiry: it shows a configuration error
+  // and keeps the sign-in, instead of a sign-in loop that can never succeed.
   useEffect(() => {
     // Demo data has no real session and never expires.
     if (api.kind === "demo") return;
@@ -107,8 +128,13 @@ function AuthGate() {
       if (e.type !== "updated" || e.action.type !== "error") return;
       const error = e.action.error;
       const signedIn = current.current;
-      if (!(error instanceof ApiError) || error.code !== "unauthorized" || !signedIn) return;
+      if (!(error instanceof ApiError) || !signedIn) return;
       if (e.query.queryKey[2] !== signedIn.id) return; // userKey: [scope, kind, userId, ...]
+      if (error.code === "misconfigured") {
+        setKeyRejected(error);
+        return;
+      }
+      if (error.code !== "unauthorized") return;
       setExpired(true);
       setUser(null);
       api.signOut({ localOnly: true }).catch(() => undefined);
@@ -120,12 +146,40 @@ function AuthGate() {
 
   const schema = useQuery({ queryKey: ["schema", api.kind], queryFn: () => api.getSchemaVersion(), staleTime: Infinity });
 
+  // Sign-out reported by Settings, which unmounts once it completes.
+  const reportSignOut = useCallback((result: SignOutResult) => setServerNotTold(!result.serverRevoked), []);
+
+  // Sign out from the key-rejected screen. Local only: the project refuses the
+  // app's key, so it can't accept a logout either (auth-js would read that 401
+  // as success). Signing out on purpose forgets this device's alert history.
+  const signOutHere = () => {
+    const leaving = current.current;
+    setSignOutFailed(false);
+    api.signOut({ localOnly: true }).then(
+      () => {
+        if (leaving) forgetUserLocalData(webStorage, api.kind, leaving.id);
+        closeSystemNotifications();
+        setServerNotTold(true);
+      },
+      () => setSignOutFailed(true),
+    );
+  };
+
   if (schema.isLoading || user === undefined) return <Spinner label="Connecting…" />;
   if (schema.error) {
+    const code = schema.error instanceof ApiError ? schema.error.code : null;
     return (
-      <Centered title="Can't reach your project">
+      <Centered title={schemaErrorTitle(code)}>
         <ErrorState error={schema.error} onRetry={() => void schema.refetch()} />
-        <ResetBackend />
+        <div className="row">
+          {/* The stored sign-in is refused: drop it here, then check again signed out. */}
+          {code === "unauthorized" && (
+            <button type="button" className="btn" onClick={() => void api.signOut({ localOnly: true }).catch(() => undefined).finally(() => void schema.refetch())}>
+              Sign in again
+            </button>
+          )}
+          <ResetBackend />
+        </div>
       </Centered>
     );
   }
@@ -141,6 +195,25 @@ function AuthGate() {
       </Centered>
     );
   }
+  if (keyRejected && user) {
+    return (
+      <Centered title="Connection key rejected">
+        {/* Remounts the app on retry; its queries then try the same key again. */}
+        <ErrorState error={keyRejected} onRetry={() => setKeyRejected(null)} />
+        {signOutFailed && (
+          <Notice tone="error">
+            <p>Couldn't sign out on this device. Try again.</p>
+          </Notice>
+        )}
+        <div className="row">
+          <button type="button" className="btn" onClick={signOutHere}>
+            Sign out
+          </button>
+          <ResetBackend />
+        </div>
+      </Centered>
+    );
+  }
   if (!user) {
     return (
       <PageErrorBoundary resetKey="sign-in">
@@ -152,6 +225,10 @@ function AuthGate() {
                 <Notice tone="warn" role="alert">
                   <p>Your session expired. Sign in again.</p>
                 </Notice>
+              ) : serverNotTold ? (
+                <Notice tone="warn" role="alert">
+                  <p>{SERVER_NOT_TOLD_MESSAGE}</p>
+                </Notice>
               ) : null
             }
           />
@@ -162,10 +239,23 @@ function AuthGate() {
   // Keyed by user: nothing held in component state (drafts, scroll, open
   // detail) survives into another account.
   return (
-    <AlertsProvider key={user.id} userId={user.id}>
-      <Shell />
-    </AlertsProvider>
+    <SignOutReportContext value={reportSignOut}>
+      <AlertsProvider key={user.id} userId={user.id}>
+        <Shell />
+      </AlertsProvider>
+    </SignOutReportContext>
   );
+}
+
+export const SERVER_NOT_TOLD_MESSAGE =
+  "Signed out on this device, but Tavro couldn't end the session on your Supabase project. To end it there too, sign in and sign out again once the project is reachable.";
+
+function schemaErrorTitle(code: ApiError["code"] | null): string {
+  if (code === "misconfigured") return "Connection key rejected";
+  if (code === "unauthorized") return "Sign-in not accepted";
+  if (code === "forbidden") return "Access refused";
+  if (code === "rate_limited") return "Too many requests";
+  return "Can't reach your project";
 }
 
 function Centered({ title, children }: { title: string; children: ReactNode }) {

@@ -3,7 +3,7 @@
 Owned by the product-manager role. Update this file after every unit of work (see `/tavro-ship`).
 Status: ✅ done and verified · 🟡 in progress · ⬜ planned · ⛔ blocked · 🔒 needs user approval.
 
-**Last updated:** 2026-11-02
+**Last updated:** 2026-11-03
 
 ## Product goal
 
@@ -14,9 +14,31 @@ Users can trust Tavro to tell them what their AI coding sessions are doing and w
 The requirements source is `docs/PRODUCT_SPEC.md`. Status for every requirement is in `docs/GAP_ANALYSIS.md`; the gap numbers (G#) below refer to it.
 
 **Next cycle** (G numbers are in GAP_ANALYSIS; session continuity is in `docs/EXECUTION_STATE.md`):
-1. **G13, reliability edges.** The request timeout is done (20 s). Still to do: partial-data presentation when one query fails. A sleep/resume test.
-2. **G16** collapsing notification bursts; **G18** moving pure web logic into `@mc/domain`; a "project paused" message.
-3. **G20** auth backlog M2, L1, L3.
+1. **G13, reliability edges:** present partial data when one query fails, and add a sleep/resume test.
+2. **Full spec re-audit** (the directive of 2026-11-03 §2):
+   - real-connector readiness;
+   - multi-host reliability;
+   - lifecycle correctness;
+   - alert and notification delivery;
+   - mobile usability;
+   - onboarding;
+   - diagnostics;
+   - accessibility.
+3. **Small follow-ups from the 2026-11-03 QA review:**
+   - Two hidden tabs each make their own sound for one burst (LOW-3).
+   - A paused project is shown both by the banner and by the page's own error state before anything loads (LOW-4).
+
+**Done 2026-11-03 (fourth cycle):**
+- **G16** notification bursts (D-018).
+- **"Project paused" and refused-response states**, with bounded retries (D-019).
+- **G18** shared logic moved into `@mc/domain`.
+- **G20** sign-in lifecycle (D-020), plus fixes from that cycle's security review:
+  - a session token could reach another project after Change backend;
+  - a failed server sign-out was reported as success;
+  - sign-out didn't reach other tabs;
+  - another user's rows could be stored as alerts.
+- **G21: a v1 trigger defect.** No host could insert a session. Found by the new Docker-free SQL-level tests (D-021) and fixed by migration `20261104000001`.
+- **Database-testing options:** `docs/DB_TESTING.md`, with an inactive CI template.
 
 **Also done 2026-11-02:** G13 request timeout, G14 unread alerts on the dashboard, G15 search, G17 bundle budget (`npm run check:release`), and G19 deployment preparation (`deploy/cloudflare/_headers`, `docs/DEPLOYMENT.md`). Deployment itself needs authorization.
 
@@ -170,6 +192,11 @@ See the release checklist in docs/QUALITY.md.
   - **L1:** a gateway 401 for a rotated publishable key also looks like an expired sign-in.
   - **L3:** no tests yet for a slow getUser racing an auth event, for multiple tabs, or for alerts kept on expiry.
 
+- From the security re-check (2026-11-03), all Low with no cross-project leak:
+  - **L2:** a project's stored sign-in can outlive leaving it when another tab signs back in to it. Fix: when a backend is created, sweep the other `tavro.auth:*` keys (needs a web-only key listing).
+  - **L3:** the AlertWatcher owner guard passes empty lists, and doesn't check prefs. Fix: tie each result to the JWT `sub` that was actually sent.
+  - **I1:** `close()` doesn't await async storage. That matters for the future Expo app.
+  - **I3:** a dev-only orphaned client under StrictMode.
 - Host credentials in the OS credential store instead of a JSON file (SECURITY gap 2).
 - Cleanup Edge Function for revoked host Auth users (SECURITY gap 4).
 

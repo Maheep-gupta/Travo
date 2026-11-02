@@ -21,6 +21,11 @@ export const STATUS_LABEL: Record<DisplayStatus, string> = {
   unknown: "Unknown",
 };
 
+export function isDisplayStatus(value: string | null): value is DisplayStatus {
+  // hasOwn, not `in`: "toString" and other prototype keys are not statuses.
+  return value !== null && Object.hasOwn(STATUS_LABEL, value);
+}
+
 /** Lower rank = needs attention sooner. */
 const ATTENTION_RANK: Record<DisplayStatus, number> = {
   approval_required: 0,

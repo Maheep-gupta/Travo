@@ -232,6 +232,11 @@ export function createDemoApi(opts: DemoApiOptions = {}): TavroApi {
     },
     async signOut() {
       signedIn = false;
+      // Nothing lives on a server, so nothing is left to revoke.
+      return { serverRevoked: true };
+    },
+    async close() {
+      signedIn = false;
     },
     onAuthChange() {
       return () => undefined;

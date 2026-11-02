@@ -1,158 +1,22 @@
 import { describe, expect, it } from "vitest";
-import type { HostRow, SessionRow } from "@mc/contracts";
 import {
   EMPTY_DASHBOARD_FILTER,
-  EXTRA_STATES,
-  MAX_QUERY_LENGTH,
-  OVERVIEW_STATES,
-  STATUS_GROUPS,
-  applyDashboardFilter,
-  buildHostView,
-  buildSessionViews,
-  countByState,
-  dashboardFilterParams,
+  SEARCH_QUERY_MAX_LENGTH,
   isDisplayStatus,
   isFiltering,
   isStatusGroup,
-  PAIRING_POLL_GRACE_MS,
-  PAIRING_POLL_MS,
-  pairingPollInterval,
-  pairingStatus,
   parseDashboardFilter,
-  prefsEqual,
-  projectOptions,
-  noMatchMessage,
   sessionAlerts,
-  unreadAlertsLabel,
   unreadBySession,
-  type ClientState,
   type DashboardFilter,
-} from "./view-model.js";
-import type { DisplayStatus, StoredAlert } from "@mc/domain";
+  type StoredAlert,
+} from "@mc/domain";
+import { dashboardFilterParams, noMatchMessage, prefsEqual, unreadAlertsLabel } from "./view-model.js";
 
-const now = new Date("2026-10-29T12:00:00Z");
-const host = (id: string, lastSeenAgoMs: number | null): HostRow => ({
-  id,
-  owner_id: "00000000-0000-4000-8000-000000000001",
-  name: id,
-  platform: null,
-  connector_version: null,
-  remote_control_allowed: false,
-  last_seen_at: lastSeenAgoMs === null ? null : new Date(now.getTime() - lastSeenAgoMs).toISOString(),
-  provider_error_since: null,
-  paired_at: null,
-  revoked_at: null,
-  created_at: now.toISOString(),
-});
-const session = (id: string, hostId: string, status: SessionRow["status"]): SessionRow => ({
-  id,
-  owner_id: "00000000-0000-4000-8000-000000000001",
-  host_id: hostId,
-  provider: "mock",
-  external_id: id,
-  title: id,
-  project_label: null,
-  status,
-  status_reason: null,
-  status_source: "mock",
-  last_activity_at: now.toISOString(),
-  last_event_summary: null,
-  capabilities: [],
-  is_demo: true,
-  started_at: null,
-  ended_at: null,
-  updated_at: now.toISOString(),
-});
-
-/** A client that fetched both lists just now. */
-const CURRENT: ClientState = { sync: "current", sessionsFetchedAt: now.getTime(), hostsFetchedAt: now.getTime() };
-
-describe("buildSessionViews", () => {
-  it("shows sessions on offline or unknown hosts as disconnected, and sorts by attention", () => {
-    const views = buildSessionViews(
-      [
-        session("on-running", "online", "running"),
-        session("off-waiting", "offline", "waiting_for_input"),
-        session("orphan", "missing", "running"),
-        session("on-approval", "online", "approval_required"),
-      ],
-      [host("online", 1000), host("offline", 10 * 60_000)],
-      now,
-      CURRENT,
-    );
-    expect(views.map((v) => [v.id, v.displayStatus])).toEqual([
-      ["on-approval", "approval_required"],
-      ["off-waiting", "disconnected"],
-      ["orphan", "disconnected"],
-      ["on-running", "running"],
-    ]);
-  });
-
-  it("never shows a stale stored status behind a host whose session source is failing", () => {
-    const failing = { ...host("failing", 1000), provider_error_since: new Date(now.getTime() - 60_000).toISOString() };
-    const views = buildSessionViews([session("a", "failing", "running"), session("b", "failing", "ended")], [failing], now, CURRENT);
-    expect(views.map((v) => [v.id, v.displayStatus])).toEqual([
-      ["a", "source_unavailable"],
-      ["b", "ended"],
-    ]);
-    expect(countByState(views).byState.source_unavailable).toBe(1);
-  });
-});
-
-describe("session freshness in views", () => {
-  it("marks sessions current only while their host is online with a working source", () => {
-    const failing = { ...host("failing", 1000), provider_error_since: new Date(now.getTime() - 60_000).toISOString() };
-    const views = buildSessionViews(
-      [session("on", "online", "running"), session("off", "offline", "running"), session("bad", "failing", "running"), session("orphan", "missing", "running")],
-      [host("online", 1000), host("offline", 10 * 60_000), failing],
-      now,
-      CURRENT,
-    );
-    const byId = Object.fromEntries(views.map((v) => [v.id, v.freshness]));
-    expect(byId.on).toEqual({ lastReadAt: now.toISOString(), stale: false, reason: "current" });
-    expect(byId.off?.stale).toBe(true);
-    expect(byId.off?.reason).toBe("host_offline");
-    // Never newer than the failure start, even though the row was written later.
-    expect(byId.bad).toEqual({ lastReadAt: failing.provider_error_since, stale: true, reason: "source_failing" });
-    expect(byId.orphan?.reason).toBe("host_unknown");
-  });
-
-  it("goes stale when the session list stopped refreshing, even though the host list is fresh", () => {
-    // A dropped realtime channel or a failing sessions query: the heartbeat says "now", the statuses don't.
-    const sessionsFetchedAt = now.getTime() - 5 * 60_000;
-    const [v] = buildSessionViews([session("a", "online", "running")], [host("online", 1000)], now, { ...CURRENT, sessionsFetchedAt });
-    expect(v?.displayStatus).toBe("running");
-    expect(v?.freshness).toEqual({ lastReadAt: new Date(sessionsFetchedAt).toISOString(), stale: true, reason: "client_not_refreshed" });
-  });
-
-  it("while the client can't refresh, keeps hosts as they were when fetched and blames the client", () => {
-    const fetchedAt = now.getTime() - 10 * 60_000;
-    // Heartbeated 5 s before the last fetch; ten minutes ago by the wall clock.
-    const laptop = host("laptop", 10 * 60_000 + 5_000);
-    for (const sync of ["offline", "unreachable", "stale"] as const) {
-      const [v] = buildSessionViews([session("a", "laptop", "waiting_for_input")], [laptop], now, { sync, sessionsFetchedAt: fetchedAt, hostsFetchedAt: fetchedAt });
-      expect(v?.hostConnectivity).toBe("online");
-      expect(v?.displayStatus).toBe("waiting_for_input");
-      expect(v?.freshness.stale).toBe(true);
-      expect(v?.freshness.reason).toBe(sync === "offline" ? "client_offline" : sync === "unreachable" ? "client_unreachable" : "client_not_refreshed");
-    }
-    // A client that is current still notices the same host going quiet.
-    expect(buildSessionViews([session("a", "laptop", "running")], [laptop], now, CURRENT)[0]?.displayStatus).toBe("disconnected");
-  });
-});
-
-describe("buildHostView", () => {
-  it("judges a host at its fetch time while the client can't refresh, and at now otherwise", () => {
-    const fetchedAt = now.getTime() - 10 * 60_000;
-    const laptop = host("laptop", 10 * 60_000 + 5_000);
-    expect(buildHostView(laptop, now, { sync: "offline", fetchedAt })).toEqual({
-      connectivity: "online",
-      freshness: { lastReadAt: laptop.last_seen_at, stale: true, reason: "client_offline" },
-    });
-    expect(buildHostView(laptop, now, { sync: "current", fetchedAt: now.getTime() }).connectivity).toBe("disconnected");
-    expect(buildHostView(host("fresh", 1000), now, { sync: "current", fetchedAt: now.getTime() }).freshness.reason).toBe("current");
-  });
-});
+// Session views, pairing, overview counts and filter application are pinned in
+// packages/domain/test. These cover what stays in the web app: the URL
+// encoding (URLSearchParams in and out) and copy, plus the per-session alert
+// rules from @mc/domain/alerts that the dashboard and session page depend on.
 
 describe("sessionAlerts", () => {
   const alert = (id: string, sessionId: string | null, at: string): StoredAlert => ({
@@ -199,47 +63,6 @@ describe("noMatchMessage", () => {
   });
 });
 
-describe("pairing confirmation", () => {
-  const ticket = { expires_at: new Date(now.getTime() + 10 * 60_000).toISOString() };
-  const fresh = (patch: Partial<HostRow>): HostRow => ({ ...host("new", null), ...patch });
-
-  it("only reports connected once the host has heartbeated", () => {
-    expect(pairingStatus(ticket, undefined, now)).toBe("waiting");
-    expect(pairingStatus(ticket, fresh({}), now)).toBe("waiting");
-    expect(pairingStatus(ticket, fresh({ paired_at: now.toISOString() }), now)).toBe("paired");
-    expect(pairingStatus(ticket, fresh({ paired_at: now.toISOString(), last_seen_at: now.toISOString() }), now)).toBe("connected");
-  });
-
-  it("is honest about stopped, expired and revoked hosts", () => {
-    expect(pairingStatus(ticket, host("new", 10 * 60_000), now)).toBe("stopped");
-    const later = new Date(now.getTime() + 11 * 60_000);
-    expect(pairingStatus(ticket, fresh({}), later)).toBe("expired");
-    // A code used in time is not "expired" just because the first heartbeat is late.
-    expect(pairingStatus(ticket, fresh({ paired_at: now.toISOString() }), later)).toBe("paired");
-    expect(pairingStatus(ticket, fresh({ revoked_at: now.toISOString() }), now)).toBe("revoked");
-  });
-
-  it("polls only while waiting, and stops a while after the code expires", () => {
-    expect(pairingPollInterval("waiting", ticket, now)).toBe(PAIRING_POLL_MS);
-    expect(pairingPollInterval("paired", ticket, now)).toBe(PAIRING_POLL_MS);
-    for (const done of ["connected", "stopped", "expired", "revoked"] as const) expect(pairingPollInterval(done, ticket, now)).toBe(false);
-    const expiry = Date.parse(ticket.expires_at);
-    expect(pairingPollInterval("paired", ticket, new Date(expiry + PAIRING_POLL_GRACE_MS))).toBe(PAIRING_POLL_MS);
-    expect(pairingPollInterval("paired", ticket, new Date(expiry + PAIRING_POLL_GRACE_MS + 1))).toBe(false);
-    expect(pairingPollInterval("waiting", { expires_at: "garbage" }, now)).toBe(false);
-  });
-});
-
-describe("status groups", () => {
-  it("assign every display status to exactly one group", () => {
-    const all: DisplayStatus[] = ["running", "waiting_for_input", "approval_required", "completed", "failed", "ended", "disconnected", "source_unavailable", "unknown"];
-    for (const s of all) {
-      const groups = Object.values(STATUS_GROUPS).filter((g) => g.statuses.includes(s));
-      expect(groups, s).toHaveLength(1);
-    }
-  });
-});
-
 describe("prefsEqual", () => {
   it("compares field by field", () => {
     const a = { on_failed: true, on_completed: false };
@@ -260,7 +83,7 @@ describe("dashboard filter in the URL", () => {
   });
 
   it("caps the search query length", () => {
-    expect(parseDashboardFilter(new URLSearchParams({ q: "x".repeat(500) })).query).toHaveLength(MAX_QUERY_LENGTH);
+    expect(parseDashboardFilter(new URLSearchParams({ q: "x".repeat(500) })).query).toHaveLength(SEARCH_QUERY_MAX_LENGTH);
   });
 
   it("trims the search query and ignores invalid ones", () => {
@@ -281,39 +104,6 @@ describe("dashboard filter in the URL", () => {
   it("round-trips", () => {
     const f: DashboardFilter = { ...EMPTY_DASHBOARD_FILTER, group: "offline", provider: "claude-code", query: "fix tests" };
     expect(parseDashboardFilter(dashboardFilterParams(f))).toEqual(f);
-  });
-});
-
-describe("per-state overview counts", () => {
-  it("counts the total, the Need you group and every display state", () => {
-    const counts = countByState([
-      { displayStatus: "approval_required" },
-      { displayStatus: "waiting_for_input" },
-      { displayStatus: "failed" },
-      { displayStatus: "running" },
-      { displayStatus: "running" },
-      { displayStatus: "source_unavailable" },
-      { displayStatus: "ended" },
-    ]);
-    expect(counts.total).toBe(7);
-    expect(counts.attention).toBe(3);
-    expect(counts.byState).toEqual({
-      running: 2,
-      waiting_for_input: 1,
-      approval_required: 1,
-      completed: 0,
-      failed: 1,
-      ended: 1,
-      disconnected: 0,
-      source_unavailable: 1,
-      unknown: 0,
-    });
-  });
-
-  it("lists every display state exactly once across the spec and extra chips", () => {
-    const all = [...OVERVIEW_STATES, ...EXTRA_STATES];
-    expect(new Set(all).size).toBe(all.length);
-    expect(all).toHaveLength(Object.keys(countByState([]).byState).length);
   });
 });
 
@@ -346,52 +136,3 @@ describe("dashboard state, host, project and sort params", () => {
   });
 });
 
-describe("applyDashboardFilter", () => {
-  const views = buildSessionViews(
-    [
-      { ...session("a-run", "h1", "running"), project_label: "api" },
-      { ...session("b-wait", "h1", "waiting_for_input"), project_label: "web" },
-      { ...session("c-fail", "h2", "failed"), project_label: "api" },
-      { ...session("d-done", "h2", "completed"), project_label: null },
-    ],
-    [host("h1", 1000), host("h2", 1000)],
-    now,
-    CURRENT,
-  );
-  const ids = (f: Partial<DashboardFilter>) => applyDashboardFilter(views, { ...EMPTY_DASHBOARD_FILTER, ...f }).map((v) => v.id);
-
-  it("composes state, host, project and query filters", () => {
-    expect(ids({})).toEqual(["b-wait", "c-fail", "d-done", "a-run"]);
-    expect(ids({ state: "failed" })).toEqual(["c-fail"]);
-    expect(ids({ host: "h1" })).toEqual(["b-wait", "a-run"]);
-    expect(ids({ project: "api" })).toEqual(["c-fail", "a-run"]);
-    expect(ids({ project: "api", host: "h1" })).toEqual(["a-run"]);
-    expect(ids({ group: "attention", host: "h2" })).toEqual(["c-fail"]);
-  });
-
-  it("searches title and project, combined with the other filters", () => {
-    // Fixture titles are the ids.
-    expect(ids({ query: "API" })).toEqual(["c-fail", "a-run"]);
-    expect(ids({ query: "fail" })).toEqual(["c-fail"]);
-    expect(ids({ query: "api", host: "h1" })).toEqual(["a-run"]);
-    expect(ids({ query: "api", state: "completed" })).toEqual([]);
-    expect(ids({ query: "   " })).toHaveLength(4);
-  });
-
-  it("matches nothing when a legacy group and a state don't overlap", () => {
-    expect(ids({ group: "working", state: "failed" })).toEqual([]);
-    expect(ids({ group: "attention", state: "failed" })).toEqual(["c-fail"]);
-  });
-
-  it("applies the chosen sort deterministically when timestamps are equal", () => {
-    // Every fixture has the same last_activity_at, so the id decides.
-    expect(ids({ sort: "recent" })).toEqual(["a-run", "b-wait", "c-fail", "d-done"]);
-    expect(ids({ sort: "working" })).toEqual(["a-run", "b-wait", "c-fail", "d-done"]);
-    expect(ids({ sort: "completed" })).toEqual(["d-done", "a-run", "b-wait", "c-fail"]);
-    expect(ids({ sort: "project" })).toEqual(["c-fail", "a-run", "b-wait", "d-done"]);
-  });
-
-  it("lists distinct projects alphabetically", () => {
-    expect(projectOptions(views)).toEqual(["api", "web"]);
-  });
-});

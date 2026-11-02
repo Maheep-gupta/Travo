@@ -19,19 +19,67 @@ export const SESSION_EXPIRED_MESSAGE = "Your sign-in has expired. Please sign in
 // refused (302), claims failed validation, e.g. `exp` in the past (303).
 const JWT_ERROR_CODES: ReadonlySet<string> = new Set(["PGRST301", "PGRST302", "PGRST303"]);
 
+/** Shown when the project refuses the app's publishable key; never the response text itself. */
+export const KEY_REJECTED_MESSAGE = "Your Supabase project rejected this app's publishable key. If the key was rotated, choose Change backend and enter the current one.";
+
 /**
- * Maps a PostgREST failure to an error safe to show users. Database text is
- * never passed through: it can name tables, columns and constraints.
- * `status` is the HTTP status of the response, when known.
+ * Whether a 401 came from the API gateway refusing the `apikey` (rotated,
+ * revoked or mistyped publishable key) rather than from an expired sign-in.
+ * The gateway answers e.g. `{"message":"Invalid API key","hint":"…"}`; PostgREST
+ * and Auth never mention an API key for a bad user token. Only matched, never shown.
  */
-export function toApiError(e: Pick<PostgrestError, "code" | "message"> | { message?: string; code?: string } | null, status?: number): ApiError {
-  const code = e?.code;
+export function isKeyRejection(e: { message?: string; code?: string; hint?: string | null } | null, status?: number): boolean {
+  if (status !== 401 || (e?.code !== undefined && JWT_ERROR_CODES.has(e.code))) return false;
+  return /\bapi key\b/i.test(`${e?.message ?? ""} ${e?.hint ?? ""}`);
+}
+
+/**
+ * Supabase's status for "the project is paused": it serves nothing until its
+ * owner restores it (supabase.com/docs/guides/troubleshooting/http-status-codes).
+ * A browser only sees it if that response carries CORS headers (unverified);
+ * otherwise the request fails like any network error and counts as unavailable.
+ */
+export const PROJECT_PAUSED_STATUS = 540;
+
+export const RATE_LIMITED_MESSAGE = "Your Supabase project is receiving too many requests. Wait a few minutes and try again.";
+
+export const PROJECT_PAUSED_MESSAGE ="Your Supabase project is paused. Restore it from the project's page in the Supabase dashboard, then try again.";
+export const PROJECT_UNAVAILABLE_MESSAGE =
+  "Could not reach your Supabase project. Check your connection and try again. A free project that hasn't been used for a while may be paused: restore it in the Supabase dashboard.";
+
+/**
+ * Whether the backend itself is unavailable rather than rejecting the request:
+ * no response (status 0: network failure, timeout or a CORS-blocked answer),
+ * a gateway or platform 5xx (502-504, 520+ incl. Supabase's 54x), PostgREST
+ * unable to reach the database (PGRST000-003), or a 5xx without a PostgREST
+ * code. A 500 that carries a database error code is a failed query, not an outage.
+ */
+function isUnavailable(code: string | undefined, status: number | undefined): boolean {
+  if (status === 0) return true;
+  if (code !== undefined && /^PGRST00\d$/.test(code)) return true;
+  if (status === undefined || status < 500) return false;
+  return status === 502 || status === 503 || status === 504 || status >= 520 || code === undefined;
+}
+
+/**
+ * Maps a PostgREST failure to an error safe to show users. Database text and
+ * response bodies are never passed through: they can name tables, columns and
+ * constraints. `status` is the HTTP status of the response, when known
+ * (supabase-js reports 0 when no response arrived).
+ */
+export function toApiError(e: Pick<PostgrestError, "code" | "message" | "hint"> | { message?: string; code?: string; hint?: string } | null, status?: number): ApiError {
+  // supabase-js reports a failed fetch with code "".
+  const code = e?.code || undefined;
+  if (status === PROJECT_PAUSED_STATUS) return new ApiError(PROJECT_PAUSED_MESSAGE, "paused");
+  if (isUnavailable(code, status)) return new ApiError(PROJECT_UNAVAILABLE_MESSAGE, "unavailable");
+  if (isKeyRejection(e, status)) return new ApiError(KEY_REJECTED_MESSAGE, "misconfigured");
   // A 401 is always an authentication failure, including 42501 on a request
   // that went out anonymously because the session was already gone.
   if ((code !== undefined && JWT_ERROR_CODES.has(code)) || status === 401 || /jwt expired/i.test(e?.message ?? "")) {
     return new ApiError(SESSION_EXPIRED_MESSAGE, "unauthorized");
   }
-  if (code === "42501") return new ApiError("You are not allowed to do that.", "forbidden");
+  if (status === 429) return new ApiError(RATE_LIMITED_MESSAGE, "rate_limited");
+  if (code === "42501" || status === 403) return new ApiError("You are not allowed to do that.", "forbidden");
   if (code === "PGRST116") return new ApiError("Not found.", "not_found");
   if (code === "54000") return new ApiError("Too many pending pairings. Revoke unused hosts first.", "invalid");
   if (code === "22023" || code === "23514") return new ApiError("The request was rejected. Check the values and try again.", "invalid");
@@ -39,15 +87,55 @@ export function toApiError(e: Pick<PostgrestError, "code" | "message"> | { messa
   return new ApiError("The request failed. Check your connection and try again.", "unknown");
 }
 
+/**
+ * Maps a failed password sign-in. Only a genuine rejection blames the email
+ * and password: an unreachable project, a rejected publishable key or a rate
+ * limit would otherwise send the user round the form again. Auth's own text
+ * is never shown.
+ */
+export function toSignInError(e: { name?: string; message?: string; code?: string; status?: number }): ApiError {
+  if (e.status === PROJECT_PAUSED_STATUS) return new ApiError(PROJECT_PAUSED_MESSAGE, "paused");
+  // auth-js: no response (status 0) or a gateway/server 5xx.
+  if (e.name === "AuthRetryableFetchError" || e.status === undefined || e.status === 0 || e.status >= 500) {
+    return new ApiError(PROJECT_UNAVAILABLE_MESSAGE, "unavailable");
+  }
+  if (isKeyRejection(e, e.status)) return new ApiError(KEY_REJECTED_MESSAGE, "misconfigured");
+  // Not "unavailable": that is treated as transient and retried.
+  if (e.status === 429) return new ApiError("Too many sign-in attempts. Wait a few minutes and try again.", "rate_limited");
+  return new ApiError("Sign-in failed. Check your email and password.", "unauthorized");
+}
+
 function parseRows<T extends z.ZodTypeAny>(schema: T, rows: unknown): z.infer<T>[] {
   return schema.array().parse(rows ?? []);
 }
 
 /**
- * Supabase-backed implementation. Uses only the publishable key plus the
- * signed-in user's JWT; every query is authorised by RLS in the database.
+ * Where the auth session is stored, one key per project. One fixed key would
+ * let a session (and its refresh token) for one project be sent to the next
+ * project the user connects to. The key also names auth-js's cross-tab channel.
  */
-export const AUTH_STORAGE_KEY = "tavro.auth";
+export function authStorageKey(url: string): string {
+  const u = new URL(url);
+  return `tavro.auth:${u.origin}${u.pathname.replace(/\/+$/, "")}`;
+}
+
+/**
+ * The single key every project shared before sessions were stored per
+ * project. Which project it belongs to can't be told reliably, so it is
+ * deleted unread: affected users sign in once more.
+ */
+export const LEGACY_AUTH_STORAGE_KEY = "tavro.auth";
+
+/** Removes a stored session and auth-js's companion entries, locally only. Never throws. */
+function removeStoredSession(storage: KeyValueStorage, key: string): void {
+  for (const k of [key, `${key}-user`, `${key}-code-verifier`]) {
+    try {
+      void Promise.resolve(storage.removeItem(k)).catch(() => undefined);
+    } catch {
+      // Blocked storage: nothing was persisted.
+    }
+  }
+}
 
 /**
  * supabase-js has no request timeout, so a request that hangs without failing
@@ -75,26 +163,55 @@ export function withRequestTimeout(fetchImpl: FetchLike, ms: number = REQUEST_TI
   };
 }
 
+/**
+ * Supabase-backed implementation. Uses only the publishable key plus the
+ * signed-in user's JWT; every query is authorised by RLS in the database.
+ */
 export function createSupabaseApi(config: ConnectionConfig, storage: KeyValueStorage): TavroApi {
   const { url, publishableKey } = ConnectionConfig.parse(config);
+  const storageKey = authStorageKey(url);
+  // Before the client exists, so no client can ever read it.
+  removeStoredSession(storage, LEGACY_AUTH_STORAGE_KEY);
   const client: SupabaseClient = createClient(url, publishableKey, {
-    // Explicit key so a failed local sign-out can still drop the stored session.
-    auth: { storage, storageKey: AUTH_STORAGE_KEY, persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+    // Explicit per-project key, so a failed local sign-out can still drop the stored session.
+    auth: { storage, storageKey, persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
     global: { fetch: withRequestTimeout((input, init) => fetch(input, init)) },
+    // supabase-js would retry reads itself (3x, on network errors, 503, 520),
+    // multiplying the app's own retries during an outage; the query client owns retrying.
+    db: { retry: false },
   });
 
   const toUser = (u: { id: string; email?: string | null } | null | undefined): AuthUser | null =>
     u ? { id: u.id, email: u.email ?? null } : null;
+  // Auth listeners, for a sign-out completed here rather than by auth-js.
+  const signedOutHere = new Set<(user: AuthUser | null) => void>();
+
+  /**
+   * Ends the session on this device without a network request. With nothing
+   * stored, auth-js's local sign-out sends no logout request but still runs its
+   * own removal, which stops an in-flight refresh re-saving the session and
+   * tells this tab and other tabs (BroadcastChannel). Only if that fails are
+   * auto-refresh stopped and this tab's listeners told here.
+   */
+  async function dropLocalSession(): Promise<void> {
+    removeStoredSession(storage, storageKey);
+    const again = await client.auth.signOut({ scope: "local" }).catch((e: unknown) => ({ error: e }));
+    if (!again.error) return;
+    await client.auth.stopAutoRefresh();
+    for (const cb of signedOutHere) cb(null);
+  }
 
   return {
     kind: "supabase",
 
     async getSchemaVersion() {
-      const { data, error } = await client.from("app_meta").select("schema_version").maybeSingle();
+      const { data, error, status } = await client.from("app_meta").select("schema_version").maybeSingle();
       if (error) {
         // Table missing => schema not installed.
         if (error.code === "42P01" || error.code === "PGRST205") return null;
-        throw new ApiError("Could not reach the Supabase project.", "unavailable");
+        // A rejected sign-in or permission is not an outage: only blame
+        // reachability when the project really didn't answer.
+        throw toApiError(error, status);
       }
       return (data as { schema_version: number } | null)?.schema_version ?? null;
     },
@@ -105,21 +222,33 @@ export function createSupabaseApi(config: ConnectionConfig, storage: KeyValueSto
     },
     async signIn(email, password) {
       const { error } = await client.auth.signInWithPassword({ email, password });
-      if (error) throw new ApiError("Sign-in failed. Check your email and password.", "unauthorized");
+      if (error) throw toSignInError(error);
     },
     async signOut(options) {
       const { error } = await client.auth.signOut(options?.localOnly ? { scope: "local" } : undefined);
+      if (!error) return { serverRevoked: true };
       // auth-js keeps the session if it couldn't load it first (e.g. a refresh that
       // failed on the network); a later successful auto-refresh would then sign the
-      // user back in silently. For a local sign-out, remove it ourselves.
-      if (error && options?.localOnly) {
-        await client.auth.stopAutoRefresh();
-        await storage.removeItem(AUTH_STORAGE_KEY);
-      }
+      // user back in silently. Signing out must always end the session on this
+      // device, so remove it ourselves. (If only the logout request failed, auth-js
+      // has already removed it.) Either way the server was not told.
+      if ((await storage.getItem(storageKey)) !== null) await dropLocalSession();
+      return { serverRevoked: false };
+    },
+    async close() {
+      // No logout request: a user leaving a project is often leaving one that
+      // is unreachable or refuses the key, and nothing may go to the next one.
+      await dropLocalSession();
+      await client.auth.dispose();
+      void client.realtime.disconnect();
     },
     onAuthChange(cb) {
       const { data } = client.auth.onAuthStateChange((_event, session) => cb(toUser(session?.user)));
-      return () => data.subscription.unsubscribe();
+      signedOutHere.add(cb);
+      return () => {
+        signedOutHere.delete(cb);
+        data.subscription.unsubscribe();
+      };
     },
 
     async listSessions() {

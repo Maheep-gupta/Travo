@@ -46,8 +46,9 @@ describe("toApiError", () => {
   });
 
   it("maps everything else to a generic unknown error", () => {
-    for (const e of [{ code: "23503", message: RAW }, { message: RAW }, null]) {
-      const r = mapped(e, 500);
+    // A 5xx without a database code is an outage (see availability.test.ts), so the codeless cases use a 4xx.
+    for (const [e, status] of [[{ code: "23503", message: RAW }, 500], [{ message: RAW }, 400], [null, 400], [null, undefined]] as const) {
+      const r = mapped(e, status);
       expect(r).toEqual({ code: "unknown", message: "The request failed. Check your connection and try again." });
     }
   });

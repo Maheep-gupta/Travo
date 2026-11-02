@@ -85,8 +85,14 @@ export class AlertStore {
   }
 
   markRead(id: string): void {
+    this.markManyRead([id]);
+  }
+
+  /** Marks several alerts read in one write, e.g. a grouped burst. */
+  markManyRead(ids: readonly string[]): void {
+    const set = new Set(ids);
     const base = this.latest();
-    const next = base.some((a) => a.id === id && !a.read) ? base.map((a) => (a.id === id ? { ...a, read: true } : a)) : base;
+    const next = base.some((a) => set.has(a.id) && !a.read) ? base.map((a) => (set.has(a.id) && !a.read ? { ...a, read: true } : a)) : base;
     this.commit(base, next);
   }
 
@@ -96,8 +102,14 @@ export class AlertStore {
   }
 
   dismiss(id: string): void {
+    this.dismissMany([id]);
+  }
+
+  /** Removes several alerts in one write. Ids no longer stored are ignored. */
+  dismissMany(ids: readonly string[]): void {
+    const set = new Set(ids);
     const base = this.latest();
-    this.commit(base, base.some((a) => a.id === id) ? base.filter((a) => a.id !== id) : base);
+    this.commit(base, base.some((a) => set.has(a.id)) ? base.filter((a) => !set.has(a.id)) : base);
   }
 
   clear(): void {

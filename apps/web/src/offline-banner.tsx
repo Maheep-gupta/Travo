@@ -1,5 +1,7 @@
-// Shell banner for offline and stale data (spec 3.5, 14.2). Reads the browser's
-// online flag and the existing query cache; it never fetches anything itself.
+// Shell banner for offline, unreachable, paused and stale data (spec 3.5, 14.2,
+// Part 16). Reads the browser's online flag and the existing query cache; it
+// never fetches anything itself. A laptop that stopped reporting is shown on
+// its host card, not here: the banner only judges this client's own fetches.
 // Refetching on reconnect is TanStack Query's own (onlineManager resumes paused
 // queries and refetchOnReconnect refreshes stale ones), so it isn't repeated here.
 import { connectionMessage, formatDataTime } from "./connectivity.js";
@@ -20,7 +22,7 @@ export function OfflineBanner() {
   return (
     <div role="status" aria-live="polite" className="offline-region">
       {message && (
-        <div className={`offline-banner ${state.kind}`}>
+        <div className={`offline-banner ${state.kind}${state.kind === "unreachable" ? ` ${state.cause}` : ""}`}>
           <IconAlert />
           <p>
             <strong>{message.title}</strong> <span>{message.detail}</span>

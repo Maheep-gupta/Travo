@@ -204,6 +204,19 @@ export function mergeAlerts(existing: readonly StoredAlert[], incoming: readonly
   return [...fresh, ...existing].slice(0, max);
 }
 
+/** Alerts about one session, newest event first (unparseable times last). */
+export function sessionAlerts(alerts: readonly StoredAlert[], sessionId: string): StoredAlert[] {
+  const time = (a: StoredAlert) => Date.parse(a.at) || 0;
+  return alerts.filter((a) => a.sessionId === sessionId).sort((a, b) => time(b) - time(a));
+}
+
+/** Unread alert count per session id, for the dashboard cards. Host alerts (no session) are not counted. */
+export function unreadBySession(alerts: readonly StoredAlert[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const a of alerts) if (!a.read && a.sessionId) out.set(a.sessionId, (out.get(a.sessionId) ?? 0) + 1);
+  return out;
+}
+
 export function unreadCount(alerts: readonly StoredAlert[]): number {
   return alerts.reduce((n, a) => n + (a.read ? 0 : 1), 0);
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { MemoryStorage } from "@mc/api-client/demo";
-import type { TavroAlert } from "@mc/domain";
+import { summarizeAlerts, type TavroAlert } from "@mc/domain";
 import { AlertStore, alertStorageKey } from "./alert-store.js";
 import {
   loadNotificationNamesEnabled,
@@ -9,6 +9,7 @@ import {
   saveNotificationNamesEnabled,
   saveSystemNotificationsEnabled,
   showSystemNotification,
+  showSystemSummary,
   systemNotificationsFailed,
   systemNotificationState,
   type NotificationApi,
@@ -19,6 +20,22 @@ const alert = (id: string, at = "2026-10-29T12:00:00Z"): TavroAlert => ({ id, ki
 const KEY = alertStorageKey("demo", "u1");
 
 describe("AlertStore", () => {
+  it("marks and dismisses several alerts in one write, ignoring unknown ids", () => {
+    const storage = new MemoryStorage();
+    const store = new AlertStore(storage, KEY);
+    store.add([alert("a"), alert("b"), alert("c")]);
+    const setItem = vi.spyOn(storage, "setItem");
+    store.markManyRead(["a", "b", "gone"]);
+    expect(setItem).toHaveBeenCalledOnce();
+    expect(store.unread()).toBe(1);
+    store.markManyRead(["a"]);
+    expect(setItem).toHaveBeenCalledOnce(); // already read: nothing written
+    store.dismissMany(["a", "c", "gone"]);
+    expect(store.getSnapshot().map((x) => x.id)).toEqual(["b"]);
+    store.dismissMany(["gone"]);
+    expect(setItem).toHaveBeenCalledTimes(2);
+  });
+
   it("adds, dedupes and reports only newly added alerts", () => {
     const store = new AlertStore(new MemoryStorage(), KEY);
     expect(store.add([alert("a")]).map((a) => a.id)).toEqual(["a"]);
@@ -154,6 +171,21 @@ describe("system notifications", () => {
     expect(systemNotificationsFailed()).toBe(true);
     expect(showSystemNotification(alert("b"), vi.fn(), fakeApi({ permission: "granted" }).api)).toBe(true);
     expect(systemNotificationsFailed()).toBe(false);
+  });
+
+  it("shows one summary for a burst, replacing open notifications, with counts and no ids or names", () => {
+    const { api, created } = fakeApi({ permission: "granted" });
+    showSystemNotification(alert("a"), vi.fn(), api);
+    const onClick = vi.fn();
+    const burst: TavroAlert[] = [alert("a"), { ...alert("b"), kind: "approval_required", sessionId: "s2" }, { ...alert("c"), kind: "completed" }];
+    expect(showSystemSummary(summarizeAlerts(burst), onClick, true, api)).toBe(true);
+    expect(created[0]?.close).toHaveBeenCalled();
+    expect(created[1]?.title).toBe("Tavro · 3 new alerts");
+    expect(created[1]?.options).toMatchObject({ body: "1 needs approval, 1 failed, 1 completed.", tag: "tavro:summary", silent: true });
+    expect(JSON.stringify(created[1]?.options)).not.toMatch(/s1|s2|h1/);
+    created[1]?.onclick?.();
+    expect(onClick).toHaveBeenCalledOnce();
+    expect(showSystemSummary(summarizeAlerts(burst), vi.fn(), false, fakeApi({ permission: "denied" }).api)).toBe(false);
   });
 
   it("adds names only when passed, and never puts them in the tag", () => {

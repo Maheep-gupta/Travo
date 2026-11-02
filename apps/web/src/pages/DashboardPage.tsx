@@ -1,43 +1,39 @@
 import { useId, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import {
+  EMPTY_DASHBOARD_FILTER,
+  EXTRA_STATES,
+  OVERVIEW_STATES,
   PROVIDERS,
+  SEARCH_QUERY_MAX_LENGTH,
   SESSION_SORTS,
   STALE_REASON_LABEL,
+  STATUS_GROUPS,
   STATUS_LABEL,
+  applyDashboardFilter,
+  countByState,
   freshnessLabel,
+  isFiltering,
   isSessionSort,
   needsAttention,
   normalizeSearchQuery,
+  parseDashboardFilter,
+  projectOptions,
   relativeTime,
+  unreadBySession,
   unreadCount,
+  type DashboardFilter,
   type DisplayStatus,
   type Freshness,
   type SessionSort,
+  type SessionView,
 } from "@mc/domain";
 import { useAlerts } from "../alerts-context.js";
 import { useApi } from "../api-context.js";
 import { DemoTag, EmptyState, ErrorState, PageHeader, SessionListSkeleton, StatusBadge } from "../components.js";
 import { useHosts, useNow, useSessionViews } from "../hooks.js";
 import { IconBell, IconClock, IconClose, IconFolder, IconHost, IconSearch, IconSessions } from "../icons.js";
-import {
-  EMPTY_DASHBOARD_FILTER,
-  EXTRA_STATES,
-  MAX_QUERY_LENGTH,
-  OVERVIEW_STATES,
-  STATUS_GROUPS,
-  applyDashboardFilter,
-  countByState,
-  dashboardFilterParams,
-  isFiltering,
-  noMatchMessage,
-  parseDashboardFilter,
-  projectOptions,
-  unreadAlertsLabel,
-  unreadBySession,
-  type DashboardFilter,
-  type SessionView,
-} from "../view-model.js";
+import { dashboardFilterParams, noMatchMessage, unreadAlertsLabel } from "../view-model.js";
 
 const SORT_ORDER = Object.keys(SESSION_SORTS) as SessionSort[];
 
@@ -196,7 +192,7 @@ export function DashboardPage() {
                   placeholder="Title or project"
                   autoComplete="off"
                   value={draft}
-                  maxLength={MAX_QUERY_LENGTH}
+                  maxLength={SEARCH_QUERY_MAX_LENGTH}
                   onChange={(e) => onSearch(e.target.value)}
                 />
                 {draft && (

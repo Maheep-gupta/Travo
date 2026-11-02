@@ -22,7 +22,7 @@ There's no separate application server. Following the approved BYOS decision (do
 | Package | Depends on | Reused by the mobile app |
 |---|---|---|
 | `@mc/contracts` | zod | Yes, unchanged |
-| `@mc/domain` | contracts | Yes, unchanged. Lint blocks DOM, Node and React imports here. |
+| `@mc/domain` | contracts | Yes, unchanged. Lint blocks DOM, Node and React imports here. Since 2026-11-03 it also holds session views (`session-views.ts`), dashboard filters (`dashboard.ts`), pairing confirmation (`pairing.ts`), connection state and retry policy (`connectivity.ts`) and alert bursts (`alert-bursts.ts`). |
 | `@mc/demo` | contracts | Yes (demo mode) |
 | `@mc/api-client` | contracts, domain, demo, supabase-js | Yes. The mobile app supplies its own `KeyValueStorage` (expo-secure-store). |
 | `apps/web` | all of the above, plus React DOM, TanStack Query, React Router | No. The mobile UI is written separately with React Native components. |

@@ -1,13 +1,14 @@
-// Component tests for the shell's offline banner (spec 3.5, 14.2): browser
-// offline events, stale and failing data from the query cache, recovery, and
-// TanStack Query's own refetch on reconnect. The banner never takes focus.
+// Component tests for the shell's offline banner (spec 3.5, 14.2, Part 16):
+// browser offline events, stale, failing and paused data from the query cache,
+// bounded retries, recovery, and TanStack Query's own refetch on reconnect.
+// The banner never takes focus.
 import type { ReactNode } from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@mc/api-client/demo";
-import { FETCH_GRACE_MS, STALE_DATA_AFTER_MS, formatDataTime } from "./connectivity.js";
-import { UserIdContext } from "./hooks.js";
+import { FETCH_GRACE_MS, MAX_FETCH_RETRIES, STALE_DATA_AFTER_MS, formatDataTime } from "./connectivity.js";
+import { UserIdContext, createQueryClient } from "./hooks.js";
 import { OfflineBanner } from "./offline-banner.js";
 
 const USER = "u1";
@@ -148,5 +149,79 @@ describe("OfflineBanner", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/** Polls the user's hosts like AlertWatcher does (every heartbeat). */
+function PollingHosts({ queryFn }: { queryFn: () => Promise<unknown[]> }) {
+  useQuery({ queryKey: HOSTS, queryFn, refetchInterval: 30_000 });
+  return null;
+}
+
+describe("OfflineBanner with the app's query client (outage and recovery)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    queryClient = createQueryClient();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const advance = (ms: number) =>
+    act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+
+  it("backs off during an outage, keeps the poll cadence, and clears once a fetch succeeds, without a reload", async () => {
+    const at = Date.now() - STALE_DATA_AFTER_MS - 5_000;
+    queryClient.setQueryData(HOSTS, [], { updatedAt: at });
+    let up = false;
+    const queryFn = vi.fn(() => (up ? Promise.resolve(["h1"]) : Promise.reject(new ApiError("down", "unavailable"))));
+    renderBanner(<PollingHosts queryFn={queryFn} />);
+
+    // The mount fetch plus MAX_FETCH_RETRIES retries after 1 s and 2 s.
+    await advance(3_500);
+    expect(queryFn).toHaveBeenCalledTimes(1 + MAX_FETCH_RETRIES);
+    expect(text()).toContain(`Can't reach the backend — showing data from ${formatDataTime(at, Date.now())}`);
+
+    // Nothing more until the next poll; then the same bounded burst, not more.
+    await advance(20_000);
+    expect(queryFn).toHaveBeenCalledTimes(1 + MAX_FETCH_RETRIES);
+    await advance(15_000);
+    expect(queryFn).toHaveBeenCalledTimes(2 * (1 + MAX_FETCH_RETRIES));
+
+    up = true;
+    await advance(30_000);
+    expect(queryFn).toHaveBeenCalledTimes(2 * (1 + MAX_FETCH_RETRIES) + 1);
+    expect(text()).toBe("");
+  });
+
+  it("reports a paused project at once, doesn't retry it, and clears once the project is restored", async () => {
+    queryClient.setQueryData(HOSTS, [], { updatedAt: Date.now() - 10_000 });
+    let paused = true;
+    const queryFn = vi.fn(() => (paused ? Promise.reject(new ApiError("paused", "paused")) : Promise.resolve(["h1"])));
+    renderBanner(<PollingHosts queryFn={queryFn} />);
+    // Fresh data isn't refetched on mount (staleTime); the first poll finds the pause.
+    await advance(30_500);
+    expect(queryFn).toHaveBeenCalledTimes(1);
+    expect(text()).toContain("Your Supabase project is paused — showing data from");
+    expect(text()).toContain("Restore it from the project's page in the Supabase dashboard");
+    expect(document.querySelector(".offline-banner.unreachable.paused")).not.toBeNull();
+
+    await advance(10_000);
+    expect(queryFn).toHaveBeenCalledTimes(1);
+
+    paused = false;
+    await advance(20_000);
+    expect(queryFn).toHaveBeenCalledTimes(2);
+    expect(text()).toBe("");
+  });
+
+  it("doesn't blame the backend for a laptop that stopped reporting (that is the host card's job)", async () => {
+    const silentHost = { id: "h1", last_seen_at: new Date(Date.now() - 6 * 3_600_000).toISOString(), provider_error_since: null, revoked_at: null };
+    queryClient.setQueryData(HOSTS, [silentHost]);
+    renderBanner();
+    await advance(5_000);
+    expect(text()).toBe("");
   });
 });

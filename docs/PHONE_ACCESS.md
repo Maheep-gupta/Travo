@@ -46,6 +46,11 @@ Privacy: the host logs IP addresses, user agents and paths. Paths like `/session
 - A week with the laptop off would pause it.
 - Mitigations: an in-app "project unreachable" state, or Pro at $25 a month (a paid decision).
 
+**What a paused project returns (researched 2026-11-03).**
+- *Verified (primary source):* Supabase documents HTTP **540** as "project paused: the project cannot process requests until it is un-paused by the owner", and 54x as platform project-state codes ([HTTP status codes](https://supabase.com/docs/guides/troubleshooting/http-status-codes)). A paused project is restored from its dashboard page within a year ([Upgrading](https://supabase.com/docs/guides/platform/upgrading)).
+- *Unverified:* whether a 540 response carries CORS headers. Without them a browser can't read the status and sees a plain network error. There's no official statement, and an open request for clearer paused-project errors has no answer ([discussion #38217](https://github.com/orgs/supabase/discussions/38217), Aug 2025). Community reports of half-paused projects show 502, 544 and CORS errors. Not tested against a real paused project.
+- *Implemented:* `toApiError` maps 540 to `ApiError` code `paused`, which the banner shows as "Your Supabase project is paused" with restore instructions. A 540 is never retried; the 30 s poll notices the restore. Everything else that means "no usable answer" is `unavailable`: status 0 (network failure, timeout, CORS), 502–504, 520+, PGRST000–003, or a 5xx without a code. The copy for `unavailable` says the project may be paused and how to restore it, so the paused case is still covered if the 540 can't be read.
+
 **Free-plan limits that matter here:**
 - 200 concurrent Realtime connections and 2M messages a month.
 - 500k Edge Function invocations.

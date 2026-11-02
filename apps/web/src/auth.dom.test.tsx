@@ -1,18 +1,34 @@
 // Authentication lifecycle through the real App shell: switching accounts
-// without signing out (G2), expired authentication (G3), and signing in
-// again after signing out. Only backend creation is swapped for a fake.
+// without signing out (G2), expired authentication (G3), signing in again
+// after signing out, races between a slow getUser or a slow query and an auth
+// event, other tabs, alert history across sign-ins (M2) and a rejected
+// publishable key (L1). Only backend creation is swapped for a fake.
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, type AuthUser, type BackendKind, type ChangeTopic, type TavroApi } from "@mc/api-client/demo";
+import { ApiError, type AuthUser, type BackendKind, type ChangeTopic, type SignOutResult, type TavroApi } from "@mc/api-client/demo";
 import type { HostRow, NotificationPrefs, PairingTicket, SessionEventRow, SessionMessageRow, SessionRow, SessionStatus } from "@mc/contracts";
 import { MAX_SCHEMA_VERSION } from "@mc/contracts/constants";
-import { alertStorageKey } from "./alert-store.js";
-import { ApiProvider } from "./api-context.js";
-import { App } from "./App.js";
+import { AlertStore, alertStorageKey } from "./alert-store.js";
+import { ApiProvider, CLOSE_WAIT_MS } from "./api-context.js";
+import { App, SERVER_NOT_TOLD_MESSAGE } from "./App.js";
+import { lastUserKey } from "./local-data.js";
 
 const backend = vi.hoisted(() => ({ api: null as TavroApi | null }));
+const notifications = vi.hoisted(() => ({ closed: 0 }));
+
+// Counts closes of open system notifications; the real function still runs.
+vi.mock("./system-notifications.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./system-notifications.js")>();
+  return {
+    ...actual,
+    closeSystemNotifications: () => {
+      notifications.closed += 1;
+      actual.closeSystemNotifications();
+    },
+  };
+});
 
 // ApiProvider builds its backend through platform.createApi; hand it the fake.
 vi.mock("./platform.js", async (importOriginal) => {
@@ -65,8 +81,16 @@ function sessionRow(owner: AuthUser, id: string, title: string, status: SessionS
 class FakeApi implements TavroApi {
   user: AuthUser | null = A;
   failWith: Error | null = null;
+  schemaError: Error | null = null;
+  /** When set, getUser answers only once this settles (a slow stored-session read). */
+  slowGetUser: Promise<AuthUser | null> | null = null;
+  /** When set, A's session list is answered only once this settles (a slow request in flight). */
+  holdA: Promise<void> | null = null;
   readonly prefsCalls = new Map<string, number>();
   readonly signOutCalls: ({ localOnly?: boolean } | undefined)[] = [];
+  /** What signOut reports: false when the server couldn't be told. */
+  serverRevoked = true;
+  closeCalls = 0;
   private readonly data = new Map<string, SessionRow[]>([
     [A.id, [sessionRow(A, "00000000-0000-4000-8000-0000000001a1", A_TITLE, "running")]],
     [B.id, [sessionRow(B, "00000000-0000-4000-8000-0000000001b1", B_TITLE, "approval_required")]],
@@ -87,10 +111,10 @@ class FakeApi implements TavroApi {
   }
 
   getSchemaVersion(): Promise<number | null> {
-    return Promise.resolve(MAX_SCHEMA_VERSION);
+    return this.schemaError ? Promise.reject(this.schemaError) : Promise.resolve(MAX_SCHEMA_VERSION);
   }
   getUser(): Promise<AuthUser | null> {
-    return Promise.resolve(this.user);
+    return this.slowGetUser ?? Promise.resolve(this.user);
   }
   signIn(email: string): Promise<void> {
     const user = [A, B].find((u) => u.email === email);
@@ -98,9 +122,13 @@ class FakeApi implements TavroApi {
     this.switchTo(user);
     return Promise.resolve();
   }
-  signOut(options?: { localOnly?: boolean }): Promise<void> {
+  signOut(options?: { localOnly?: boolean }): Promise<SignOutResult> {
     this.signOutCalls.push(options);
     this.switchTo(null);
+    return Promise.resolve({ serverRevoked: this.serverRevoked });
+  }
+  close(): Promise<void> {
+    this.closeCalls += 1;
     return Promise.resolve();
   }
   onAuthChange(cb: (user: AuthUser | null) => void): () => void {
@@ -109,7 +137,10 @@ class FakeApi implements TavroApi {
   }
   listSessions(): Promise<SessionRow[]> {
     try {
-      return Promise.resolve((this.data.get(this.owner().id) ?? []).map((s) => ({ ...s })));
+      // The owner is fixed when the request goes out, as with a real token.
+      const rows = (this.data.get(this.owner().id) ?? []).map((s) => ({ ...s }));
+      if (this.holdA && this.user === A) return this.holdA.then(() => rows);
+      return Promise.resolve(rows);
     } catch (e) {
       return Promise.reject(e as Error);
     }
@@ -166,6 +197,8 @@ function setBackend(kind: BackendKind): void {
 }
 
 beforeEach(() => {
+  window.localStorage.clear();
+  notifications.closed = 0;
   setBackend("supabase");
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 });
@@ -175,11 +208,19 @@ afterEach(() => {
   backend.api = null;
 });
 
-function renderApp(): void {
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+function renderApp(path = "/"): void {
   render(
     <QueryClientProvider client={queryClient}>
       <ApiProvider>
-        <MemoryRouter initialEntries={["/"]}>
+        <MemoryRouter initialEntries={[path]}>
           <App />
         </MemoryRouter>
       </ApiProvider>
@@ -193,6 +234,25 @@ const storedAlerts = (user: AuthUser): unknown[] => JSON.parse(window.localStora
 
 async function signedInAs(title: string): Promise<void> {
   await waitFor(() => expect(pageText()).toContain(title), { timeout: 5000 });
+}
+
+async function onSignInPage(): Promise<void> {
+  expect(await screen.findByRole("heading", { name: "Sign in" }, { timeout: 5000 })).toBeTruthy();
+}
+
+function signInWith(user: AuthUser): void {
+  fireEvent.change(screen.getByLabelText("Email"), { target: { value: user.email } });
+  fireEvent.change(screen.getByLabelText("Password"), { target: { value: "pw" } });
+  fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+}
+
+const NAMES_KEY_PREFIX = "tavro.systemNotificationNames.v1:";
+
+/** One stored alert for `user` (ids and kinds only, as the app stores them), plus the names opt-in. */
+function seedAlert(user: AuthUser): void {
+  const key = alertStorageKey(api.kind, user.id);
+  new AlertStore(window.localStorage, key).add([{ id: `host_disconnected:${hostId(user)}:${T0}`, kind: "host_disconnected", sessionId: null, hostId: hostId(user), at: T0, isDemo: true }]);
+  window.localStorage.setItem(NAMES_KEY_PREFIX + key, "on");
 }
 
 describe("switching accounts without signing out", () => {
@@ -302,5 +362,248 @@ describe("sign out, then sign in again", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await signedInAs(A_TITLE);
     await waitFor(() => expect(api.prefsCalls.get(A.id)).toBe(2));
+  });
+});
+
+describe("races with auth events", () => {
+  it("a slow getUser for A that answers after a sign-out does not sign A back in", async () => {
+    const slow = deferred<AuthUser | null>();
+    api.slowGetUser = slow.promise;
+    renderApp();
+    expect(await screen.findByText("Connecting…", undefined, { timeout: 5000 })).toBeTruthy();
+
+    act(() => api.switchTo(null));
+    await onSignInPage();
+    await act(async () => {
+      slow.resolve(A);
+      await slow.promise;
+    });
+    expect(screen.getByRole("heading", { name: "Sign in" })).toBeTruthy();
+    expect(pageText()).not.toContain(A_TITLE);
+    expect(cachedKeys().every((k) => k[0] === "schema")).toBe(true);
+  });
+
+  it("a slow getUser for A that answers after B signed in leaves B in place", async () => {
+    const slow = deferred<AuthUser | null>();
+    api.slowGetUser = slow.promise;
+    renderApp();
+    expect(await screen.findByText("Connecting…", undefined, { timeout: 5000 })).toBeTruthy();
+
+    act(() => api.switchTo(B));
+    await signedInAs(B_TITLE);
+    await act(async () => {
+      slow.resolve(A);
+      await slow.promise;
+    });
+    expect(pageText()).toContain(B_TITLE);
+    expect(pageText()).not.toContain(A_TITLE);
+    expect(cachedKeys().some((k) => k.includes(A.id))).toBe(false);
+  });
+
+  it("A's response still in flight when B signs in is never written into B's view", async () => {
+    renderApp();
+    await signedInAs(A_TITLE);
+    const hold = deferred<undefined>();
+    api.holdA = hold.promise;
+    // A's refetch goes out and hangs.
+    act(() => void queryClient.invalidateQueries({ queryKey: ["sessions"] }));
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ["sessions"] })).toBeGreaterThan(0));
+
+    act(() => api.switchTo(B));
+    await signedInAs(B_TITLE);
+    await act(async () => {
+      hold.resolve(undefined);
+      await hold.promise;
+    });
+    expect(pageText()).toContain(B_TITLE);
+    expect(pageText()).not.toContain(A_TITLE);
+    expect(cachedKeys().some((k) => k.includes(A.id))).toBe(false);
+  });
+});
+
+describe("another tab", () => {
+  it("Sign out in another tab: this tab drops A's data and cache, closes notifications and sees the cleared list", async () => {
+    seedAlert(A);
+    renderApp();
+    await signedInAs(A_TITLE);
+    const closedBefore = notifications.closed;
+
+    // What the other tab's Sign out does to shared storage, then auth-js's broadcast SIGNED_OUT.
+    const key = alertStorageKey(api.kind, A.id);
+    act(() => {
+      window.localStorage.setItem(key, "[]");
+      window.dispatchEvent(new StorageEvent("storage", { key }));
+      api.switchTo(null);
+    });
+    await onSignInPage();
+    expect(pageText()).not.toContain(A_TITLE);
+    expect(cachedKeys().every((k) => k[0] === "schema")).toBe(true);
+    expect(notifications.closed).toBeGreaterThan(closedBefore);
+    expect(storedAlerts(A)).toEqual([]);
+  });
+
+  it("a sign-in that ended in another tab (expiry, failed refresh) keeps A's history for A's return", async () => {
+    seedAlert(A);
+    renderApp();
+    await signedInAs(A_TITLE);
+
+    act(() => api.switchTo(null));
+    await onSignInPage();
+    expect(pageText()).not.toContain(A_TITLE);
+    expect(storedAlerts(A)).toHaveLength(1);
+
+    signInWith(A);
+    await signedInAs(A_TITLE);
+    expect(storedAlerts(A)).toHaveLength(1);
+    expect(screen.getAllByRole("link", { name: "Alerts, 1 unread" }).length).toBeGreaterThan(0);
+  });
+});
+
+describe("alert history across sign-ins", () => {
+  it("keeps A's alerts after A's sign-in expires and A signs back in", async () => {
+    seedAlert(A);
+    renderApp();
+    await signedInAs(A_TITLE);
+
+    api.failWith = new ApiError("Your sign-in has expired. Please sign in again.", "unauthorized");
+    await act(() => queryClient.invalidateQueries({ queryKey: ["sessions"] }));
+    await onSignInPage();
+    expect(storedAlerts(A)).toHaveLength(1);
+
+    api.failWith = null;
+    signInWith(A);
+    await signedInAs(A_TITLE);
+    expect(storedAlerts(A)).toHaveLength(1);
+    expect(window.localStorage.getItem(NAMES_KEY_PREFIX + alertStorageKey(api.kind, A.id))).toBe("on");
+  });
+
+  it("removes A's alerts and names opt-in when B signs in after A's sign-in expired", async () => {
+    seedAlert(A);
+    renderApp();
+    await signedInAs(A_TITLE);
+    expect(window.localStorage.getItem(lastUserKey(api.kind))).toBe(A.id);
+
+    api.failWith = new ApiError("Your sign-in has expired. Please sign in again.", "unauthorized");
+    await act(() => queryClient.invalidateQueries({ queryKey: ["sessions"] }));
+    await onSignInPage();
+    api.failWith = null;
+    signInWith(B);
+    await signedInAs(B_TITLE);
+
+    expect(window.localStorage.getItem(alertStorageKey(api.kind, A.id))).toBeNull();
+    expect(window.localStorage.getItem(NAMES_KEY_PREFIX + alertStorageKey(api.kind, A.id))).toBeNull();
+    expect(window.localStorage.getItem(lastUserKey(api.kind))).toBe(B.id);
+    expect(pageText()).not.toContain(A_TITLE);
+  });
+
+  it("Sign out in Settings clears A's history and signs out", async () => {
+    seedAlert(A);
+    renderApp("/settings");
+    fireEvent.click(await screen.findByRole("button", { name: "Sign out" }, { timeout: 5000 }));
+    await onSignInPage();
+    expect(api.signOutCalls).toEqual([undefined]);
+    await waitFor(() => expect(storedAlerts(A)).toEqual([]));
+    expect(pageText()).not.toContain(SERVER_NOT_TOLD_MESSAGE);
+  });
+
+  it("says so on the sign-in page when the server couldn't be told, until the next sign-in", async () => {
+    api.serverRevoked = false;
+    renderApp("/settings");
+    fireEvent.click(await screen.findByRole("button", { name: "Sign out" }, { timeout: 5000 }));
+    await onSignInPage();
+    expect((await screen.findByRole("alert")).textContent).toContain(SERVER_NOT_TOLD_MESSAGE);
+
+    signInWith(A);
+    // Still on Settings, signed in again.
+    expect(await screen.findByRole("button", { name: "Sign out" }, { timeout: 5000 })).toBeTruthy();
+    expect(pageText()).not.toContain(SERVER_NOT_TOLD_MESSAGE);
+  });
+});
+
+describe("Change backend", () => {
+  it("closes the backend being left (its stored sign-in goes with it)", async () => {
+    renderApp("/settings");
+    fireEvent.click(await screen.findByRole("button", { name: "Change backend" }, { timeout: 5000 }));
+    await waitFor(() => expect(api.closeCalls).toBe(1));
+    expect(pageText()).not.toContain(A_TITLE);
+  });
+
+  it("doesn't leave the user on the loading screen when the backend being left never finishes closing", async () => {
+    // e.g. its sign-out waits on a refresh against an unreachable project
+    const hang = vi.spyOn(api, "close").mockReturnValue(new Promise<void>(() => undefined));
+    renderApp("/settings");
+    fireEvent.click(await screen.findByRole("button", { name: "Change backend" }, { timeout: 5000 }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open demo" }, { timeout: 5000 }));
+    expect(hang).toHaveBeenCalledOnce();
+    // The next backend starts once CLOSE_WAIT_MS has passed.
+    expect(await screen.findByRole("button", { name: "Sign out" }, { timeout: CLOSE_WAIT_MS + 3000 })).toBeTruthy();
+  }, CLOSE_WAIT_MS + 6000);
+});
+
+describe("rejected publishable key", () => {
+  const KEY_REJECTED = "Your Supabase project rejected this app's publishable key. If the key was rotated, choose Change backend and enter the current one.";
+
+  it("shows a configuration error instead of sending the user to sign in, and can retry", async () => {
+    renderApp();
+    await signedInAs(A_TITLE);
+
+    api.failWith = new ApiError(KEY_REJECTED, "misconfigured");
+    await act(() => queryClient.invalidateQueries({ queryKey: ["sessions"] }));
+    expect(await screen.findByRole("heading", { name: "Connection key rejected" }, { timeout: 5000 })).toBeTruthy();
+    expect(pageText()).toContain(KEY_REJECTED);
+    expect(screen.getByRole("button", { name: "Change backend" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Sign in" })).toBeNull();
+    expect(pageText()).not.toContain(EXPIRED_NOTICE);
+    expect(pageText()).not.toContain(A_TITLE);
+    expect(api.signOutCalls).toEqual([]);
+
+    // Fixed (e.g. the key was restored): Try again brings the same account back.
+    api.failWith = null;
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await signedInAs(A_TITLE);
+  });
+
+  it("offers Sign out: ends the session locally, forgets A's history and says the server wasn't told", async () => {
+    seedAlert(A);
+    renderApp();
+    await signedInAs(A_TITLE);
+
+    api.failWith = new ApiError(KEY_REJECTED, "misconfigured");
+    await act(() => queryClient.invalidateQueries({ queryKey: ["sessions"] }));
+    expect(await screen.findByRole("heading", { name: "Connection key rejected" }, { timeout: 5000 })).toBeTruthy();
+    api.failWith = null;
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+    await onSignInPage();
+    expect(api.signOutCalls).toEqual([{ localOnly: true }]);
+    expect(window.localStorage.getItem(alertStorageKey(api.kind, A.id))).toBeNull();
+    expect((await screen.findByRole("alert")).textContent).toContain(SERVER_NOT_TOLD_MESSAGE);
+  });
+
+  it("names the problem on startup too", async () => {
+    api.schemaError = new ApiError(KEY_REJECTED, "misconfigured");
+    renderApp();
+    expect(await screen.findByRole("heading", { name: "Connection key rejected" }, { timeout: 5000 })).toBeTruthy();
+    expect(pageText()).toContain(KEY_REJECTED);
+  });
+});
+
+describe("startup errors that aren't an outage", () => {
+  it("a refused stored sign-in is named as such, and Sign in again drops it", async () => {
+    api.schemaError = new ApiError("Your sign-in has expired. Please sign in again.", "unauthorized");
+    renderApp();
+    expect(await screen.findByRole("heading", { name: "Sign-in not accepted" }, { timeout: 5000 })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Can't reach your project" })).toBeNull();
+
+    api.schemaError = null;
+    fireEvent.click(screen.getByRole("button", { name: "Sign in again" }));
+    await onSignInPage();
+    expect(api.signOutCalls).toEqual([{ localOnly: true }]);
+  });
+
+  it("a refused permission and a rate limit are not blamed on reachability", async () => {
+    api.schemaError = new ApiError("You are not allowed to do that.", "forbidden");
+    renderApp();
+    expect(await screen.findByRole("heading", { name: "Access refused" }, { timeout: 5000 })).toBeTruthy();
   });
 });

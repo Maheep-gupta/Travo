@@ -6,10 +6,11 @@
 |---|---|---|
 | Type check (strict, all workspaces and DB tests) | `npm run typecheck` | Available |
 | Lint, including the platform-neutrality rules for `@mc/domain` | `npm run lint` | Available |
-| Unit and component tests (vitest "unit" in Node, "dom" in jsdom) | `npm test` | Available. 386 tests as of 2026-11-02 (third cycle), including axe accessibility checks (jsdom; no colour contrast). Component tests use jsdom, not a real browser, so layout, CSS and real notification APIs aren't covered. |
+| Unit, component and SQL-level tests (vitest "unit" in Node, "dom" in jsdom, "sql" in PGlite) | `npm test` | Available. 534 tests as of 2026-11-03 (fourth cycle), 50 of them SQL-level, including axe accessibility checks (jsdom; no colour contrast). Component tests use jsdom, not a real browser, so layout, CSS and real notification APIs aren't covered. |
 | Production web build | `npm run build -w @mc/web` | Available |
 | Browser checks (65) | `npm run test:e2e` | **Unavailable.** Endpoint protection kills headless Chrome and Edge. |
 | RLS and isolation tests | `npm run test:db` | **Unavailable.** The Docker engine doesn't respond. |
+| SQL-level migration tests (PGlite) — **not a substitute for `test:db`** | `npm run test:sql` | Available, Docker-free (~6 s). Runs the real migrations, unmodified, on PGlite (Postgres 18 in WASM) behind a minimal Supabase shim (`supabase/sql-tests/supabase-shim.sql`, which lists its differences from Supabase). Covers grants, RLS, triggers, RPCs and the v1→v3 upgrade path, with SQL shaped like PostgREST's. Its first run found that the v1 trigger `set_owner_from_host` made every session insert fail with 42703. That's fixed by migration `20261104000001` (D-021), and all 50 pass. **Part of `npm test` and `check` since 2026-11-03.** |
 
 `npm run check` runs the first three. A change to the web app also needs the build to pass.
 
@@ -28,6 +29,7 @@ When reporting results, label each check as **automated** (it ran), **synthetic*
 - Alerts are detected by the open app, so changes that happen while Tavro is closed don't produce alerts. They show up as the current status when you reopen it.
 - Alert detection pauses while the browser reports being offline or a data fetch has failed. If Tavro's own connection drops silently without a failed fetch, a host can still be reported as disconnected.
 - Visual and responsive quality is reviewed from code only. No screenshots can be taken here.
+- The PGlite SQL tests (`test:sql`) show only what the migrations' SQL enforces. They don't exercise PostgREST, GoTrue (real JWTs, app_metadata handling), Realtime delivery, the `pair-host` Edge Function or Supabase's real role setup, and they run on a different Postgres major version. `test:db` is still required before real data.
 - The host and session lists are polled every 30 s, including in background tabs, so a dropped Realtime channel can't freeze them. That's one extra read per open tab every 30 s against the user's own Supabase project (fine for a handful of sessions; it counts toward Free-plan egress).
 - Every Supabase request is aborted after 20 s (`REQUEST_TIMEOUT_MS`), because supabase-js has no timeout of its own. A hung request therefore shows the "can't reach the backend" banner within about 20 s plus the 90 s stale window, rather than never.
 - "Updated X ago" is an upper bound when stale: the last good read was no later than the time shown.

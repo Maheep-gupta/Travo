@@ -1,0 +1,52 @@
+# TEMPLATE — not active. Runs the database security tests (`npm run test:db`)
+# on a GitHub-hosted runner, which has Docker. See docs/DB_TESTING.md, option B.
+#
+# To activate (founder decision, D-017): copy to .github/workflows/db-tests.yml
+# and push. Before that, pin each action to a full commit SHA.
+#
+# No secrets are used: `supabase start` creates a throwaway local stack inside
+# the runner, with its own generated keys. No session data exists there.
+name: db-tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check:release
+
+  db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # The CLI comes from devDependencies, so its version matches local development.
+      - run: npx supabase start
+      - run: npm run db:lint
+      - run: npm run test:db
+      - if: always()
+        run: npx supabase stop --no-backup

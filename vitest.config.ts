@@ -21,6 +21,18 @@ export default defineConfig({
         },
       },
       {
+        // SQL-level checks of the migrations on PGlite (Postgres in WASM) under
+        // a minimal Supabase shim; no Docker needed. NOT a substitute for "db":
+        // PostgREST, GoTrue, Realtime and Edge Functions aren't involved.
+        test: {
+          name: "sql",
+          include: ["supabase/sql-tests/**/*.test.ts"],
+          environment: "node",
+          testTimeout: 30_000,
+          hookTimeout: 60_000,
+        },
+      },
+      {
         // Requires `npm run db:start` (local Supabase in Docker).
         test: {
           name: "db",
