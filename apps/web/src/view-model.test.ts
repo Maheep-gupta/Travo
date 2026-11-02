@@ -21,7 +21,10 @@ import {
   parseDashboardFilter,
   prefsEqual,
   projectOptions,
+  noMatchMessage,
   sessionAlerts,
+  unreadAlertsLabel,
+  unreadBySession,
   type ClientState,
   type DashboardFilter,
 } from "./view-model.js";
@@ -172,6 +175,28 @@ describe("sessionAlerts", () => {
     expect(sessionAlerts(list, "s1").map((a) => a.id)).toEqual(["new", "old"]);
     expect(sessionAlerts(list, "none")).toEqual([]);
   });
+
+  it("counts unread alerts per session, ignoring read and host alerts", () => {
+    const list = [
+      alert("a", "s1", "2026-10-29T10:00:00Z"),
+      alert("b", "s1", "2026-10-29T11:00:00Z"),
+      { ...alert("c", "s2", "2026-10-29T11:00:00Z"), read: true },
+      alert("d", null, "2026-10-29T11:00:00Z"),
+    ];
+    expect([...unreadBySession(list)]).toEqual([["s1", 2]]);
+    expect(unreadBySession([]).size).toBe(0);
+    expect(unreadAlertsLabel(1)).toBe("1 unread alert");
+    expect(unreadAlertsLabel(3)).toBe("3 unread alerts");
+  });
+});
+
+describe("noMatchMessage", () => {
+  it("names the active search and filters", () => {
+    expect(noMatchMessage("  deploy ", [])).toBe('No sessions match the search "deploy".');
+    expect(noMatchMessage("", ["Failed"])).toBe("No sessions match the filter Failed.");
+    expect(noMatchMessage("deploy", ["Failed", "docs"])).toBe('No sessions match the search "deploy" with the filters Failed, docs.');
+    expect(noMatchMessage("", [])).toBe("No sessions match.");
+  });
 });
 
 describe("pairing confirmation", () => {
@@ -236,6 +261,15 @@ describe("dashboard filter in the URL", () => {
 
   it("caps the search query length", () => {
     expect(parseDashboardFilter(new URLSearchParams({ q: "x".repeat(500) })).query).toHaveLength(MAX_QUERY_LENGTH);
+  });
+
+  it("trims the search query and ignores invalid ones", () => {
+    expect(parseDashboardFilter(new URLSearchParams({ q: "  deploy  " })).query).toBe("deploy");
+    expect(parseDashboardFilter(new URLSearchParams({ q: "   " })).query).toBe("");
+    expect(parseDashboardFilter(new URLSearchParams({ q: "a\u0000b" })).query).toBe("");
+    expect(dashboardFilterParams({ ...EMPTY_DASHBOARD_FILTER, query: "  fix tests " }).toString()).toBe("q=fix+tests");
+    expect(dashboardFilterParams({ ...EMPTY_DASHBOARD_FILTER, query: "bad\u0007" }).toString()).toBe("");
+    expect(isFiltering({ ...EMPTY_DASHBOARD_FILTER, query: " \t" })).toBe(false);
   });
 
   it("serialises, omitting empty values and keeping unrelated params", () => {
@@ -333,6 +367,15 @@ describe("applyDashboardFilter", () => {
     expect(ids({ project: "api" })).toEqual(["c-fail", "a-run"]);
     expect(ids({ project: "api", host: "h1" })).toEqual(["a-run"]);
     expect(ids({ group: "attention", host: "h2" })).toEqual(["c-fail"]);
+  });
+
+  it("searches title and project, combined with the other filters", () => {
+    // Fixture titles are the ids.
+    expect(ids({ query: "API" })).toEqual(["c-fail", "a-run"]);
+    expect(ids({ query: "fail" })).toEqual(["c-fail"]);
+    expect(ids({ query: "api", host: "h1" })).toEqual(["a-run"]);
+    expect(ids({ query: "api", state: "completed" })).toEqual([]);
+    expect(ids({ query: "   " })).toHaveLength(4);
   });
 
   it("matches nothing when a legacy group and a state don't overlap", () => {

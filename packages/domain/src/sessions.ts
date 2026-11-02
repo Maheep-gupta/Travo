@@ -15,7 +15,6 @@ export interface FilterableSession {
   host_id: string;
   title: string | null;
   project_label: string | null;
-  last_event_summary: string | null;
   last_activity_at: string | null;
 }
 
@@ -25,15 +24,45 @@ export function matchesFilter(session: FilterableSession, filter: SessionFilter)
   if (filter.providers?.length && !filter.providers.includes(session.provider)) return false;
   if (filter.hostIds?.length && !filter.hostIds.includes(session.host_id)) return false;
   if (filter.projects?.length && (session.project_label === null || !filter.projects.includes(session.project_label))) return false;
-  const q = filter.query?.trim().toLowerCase();
-  if (q) {
-    const haystack = [session.title, session.project_label, session.last_event_summary]
-      .filter((s): s is string => Boolean(s))
-      .join(" ")
-      .toLowerCase();
-    if (!haystack.includes(q)) return false;
-  }
-  return true;
+  return filter.query === undefined || matchesSearch(session, filter.query);
+}
+
+/** Longest search query kept; longer ones are cut to this. */
+export const SEARCH_QUERY_MAX_LENGTH = 200;
+
+/** Control characters. A fixed pattern: nothing here is ever built from input. */
+const CONTROL_CHARS = /\p{Cc}/u;
+
+/**
+ * A search query as typed or read from a URL: trimmed and capped. Queries
+ * containing control characters aren't something a person types, so they
+ * mean "no search" rather than a search for something odd.
+ */
+export function normalizeSearchQuery(raw: string | null | undefined): string {
+  if (!raw || CONTROL_CHARS.test(raw)) return "";
+  return raw.trim().slice(0, SEARCH_QUERY_MAX_LENGTH).trim();
+}
+
+/**
+ * Case- and width-insensitive form for matching: compatibility-normalised
+ * (full-width letters, ligatures) and lower-cased without a locale, so every
+ * device folds the same way.
+ */
+export function foldForSearch(text: string): string {
+  return text.normalize("NFKC").toLowerCase();
+}
+
+/**
+ * Text search over the session title and project label (spec 3.3). Every
+ * whitespace-separated term must appear in one of the two, so "billing opkey"
+ * finds "Refactor billing" in project OpkeyStack. Plain substring checks, no
+ * pattern syntax, so any input is safe. A blank query matches everything.
+ */
+export function matchesSearch(session: Pick<FilterableSession, "title" | "project_label">, query: string): boolean {
+  const terms = foldForSearch(normalizeSearchQuery(query)).split(/\s+/u).filter(Boolean);
+  if (!terms.length) return true;
+  const fields = [session.title, session.project_label].filter((s): s is string => Boolean(s)).map(foldForSearch);
+  return terms.every((t) => fields.some((f) => f.includes(t)));
 }
 
 /** What the sort orders need: filter fields plus a stable id and the host's display name. */

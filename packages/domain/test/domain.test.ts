@@ -5,17 +5,21 @@ import {
   diffObservations,
   displayStatus,
   effectiveCapabilities,
+  foldForSearch,
   hostConnectivity,
   hostSourceOk,
   isLoopbackUrl,
   isSessionSort,
   mapClaudeAgentsStatus,
   matchesFilter,
+  matchesSearch,
+  normalizeSearchQuery,
   relativeTime,
   sortSessions,
   summariseByHost,
   transcriptContentDecision,
   DISCONNECT_AFTER_MS,
+  SEARCH_QUERY_MAX_LENGTH,
   SESSION_SORTS,
   type SessionSort,
   type SortableSession,
@@ -139,7 +143,6 @@ describe("filtering and ordering", () => {
     hostName: "Laptop",
     title: "Refactor billing",
     project_label: "OpkeyStack",
-    last_event_summary: null,
     last_activity_at: ago(1000),
   };
   it("filters by status, provider, host, project and search text", () => {
@@ -156,6 +159,53 @@ describe("filtering and ordering", () => {
     // Filters compose: every given field must match.
     expect(matchesFilter(base, { statuses: ["running"], hostIds: ["h-1"], projects: ["OpkeyStack"], query: "billing" })).toBe(true);
     expect(matchesFilter(base, { statuses: ["running"], hostIds: ["h-2"] })).toBe(false);
+    expect(matchesFilter(base, { statuses: ["failed"], query: "billing" })).toBe(false);
+  });
+
+  it("searches title and project, case-insensitively, every term in either field", () => {
+    expect(matchesSearch(base, "REFACTOR")).toBe(true);
+    expect(matchesSearch(base, "opkeystack")).toBe(true);
+    expect(matchesSearch(base, "  billing   opkey ")).toBe(true);
+    expect(matchesSearch(base, "billing payments")).toBe(false);
+    // Fields are matched separately, never as one joined string.
+    expect(matchesSearch(base, "billing opkeystack")).toBe(true);
+    expect(matchesSearch(base, "billingopkey")).toBe(false);
+    expect(matchesSearch(base, "g o")).toBe(true);
+    expect(matchesSearch({ title: null, project_label: null }, "x")).toBe(false);
+    expect(matchesSearch({ title: null, project_label: "docs" }, "DOC")).toBe(true);
+  });
+
+  it("matches everything for a blank or invalid query", () => {
+    for (const q of ["", "   ", "\t\n", "a\u0000b", "x\u007f"]) expect(matchesSearch(base, q), JSON.stringify(q)).toBe(true);
+    expect(matchesFilter(base, { query: "   " })).toBe(true);
+  });
+
+  it("treats pattern characters as plain text", () => {
+    const s = { title: "Fix (a+b)* [regex] ^$ \\d", project_label: null };
+    for (const q of ["(a+b)*", "[regex]", "^$", "\\d", ".*"]) expect(matchesSearch(s, q), q).toBe(q !== ".*");
+    expect(matchesSearch(base, ".*")).toBe(false);
+  });
+
+  it("folds case and width Unicode-safely", () => {
+    const s = { title: "Überprüfung ÉTÉ", project_label: "ＡＰＩ-ｇａｔｅｗａｙ" };
+    expect(matchesSearch(s, "überprüfung")).toBe(true);
+    expect(matchesSearch(s, "ÜBERPRÜFUNG été")).toBe(true);
+    expect(matchesSearch(s, "api-gateway")).toBe(true);
+    // Decomposed "é" (e + combining accent) finds the precomposed one.
+    expect(matchesSearch(s, "été")).toBe(true);
+    expect(matchesSearch({ title: "Ωmega", project_label: null }, "ωMEGA")).toBe(true);
+    expect(foldForSearch("ﬁle")).toBe("file");
+    expect(matchesSearch({ title: "😀 emoji task", project_label: null }, "😀")).toBe(true);
+  });
+
+  it("normalises queries: trimmed, capped, control characters rejected", () => {
+    expect(normalizeSearchQuery("  deploy  ")).toBe("deploy");
+    expect(normalizeSearchQuery(null)).toBe("");
+    expect(normalizeSearchQuery(undefined)).toBe("");
+    expect(normalizeSearchQuery("a\u0007")).toBe("");
+    expect(normalizeSearchQuery("x".repeat(500))).toHaveLength(SEARCH_QUERY_MAX_LENGTH);
+    // Cutting at the cap never leaves trailing space.
+    expect(normalizeSearchQuery(`${"x".repeat(SEARCH_QUERY_MAX_LENGTH - 1)} yz`)).toBe("x".repeat(SEARCH_QUERY_MAX_LENGTH - 1));
   });
   it("puts blocked sessions first, then most recent", () => {
     const list: SortableSession[] = [

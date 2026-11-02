@@ -2,6 +2,7 @@ import type { HostRow, PairingTicket, ProviderId, SessionRow } from "@mc/contrac
 import {
   DEFAULT_SESSION_SORT,
   PROVIDERS,
+  SEARCH_QUERY_MAX_LENGTH,
   STATUS_LABEL,
   compareByAttention,
   connectivityJudgedAt,
@@ -11,6 +12,7 @@ import {
   hostSourceOk,
   isSessionSort,
   matchesFilter,
+  normalizeSearchQuery,
   sessionFreshness,
   sortSessions,
   withClientRead,
@@ -146,7 +148,7 @@ export const EMPTY_DASHBOARD_FILTER: DashboardFilter = {
   sort: DEFAULT_SESSION_SORT,
 };
 
-export const MAX_QUERY_LENGTH = 200;
+export const MAX_QUERY_LENGTH = SEARCH_QUERY_MAX_LENGTH;
 /** Same cap as sessions.project_label. */
 export const MAX_PROJECT_LENGTH = 200;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -174,7 +176,8 @@ export function parseDashboardFilter(params: URLSearchParams): DashboardFilter {
     host: host !== null && UUID.test(host) ? host.toLowerCase() : null,
     project: project && project.length <= MAX_PROJECT_LENGTH ? project : null,
     provider: isProviderId(provider) ? provider : null,
-    query: (params.get("q") ?? "").slice(0, MAX_QUERY_LENGTH),
+    // Trimmed and capped; a query with control characters is dropped.
+    query: normalizeSearchQuery(params.get("q")),
     sort: isSessionSort(sort) ? sort : DEFAULT_SESSION_SORT,
   };
 }
@@ -188,14 +191,27 @@ export function dashboardFilterParams(filter: DashboardFilter, base: URLSearchPa
   set("host", filter.host);
   set("project", filter.project);
   set("provider", filter.provider);
-  set("q", filter.query.trim() ? filter.query.slice(0, MAX_QUERY_LENGTH) : null);
+  set("q", normalizeSearchQuery(filter.query) || null);
   set("sort", filter.sort === DEFAULT_SESSION_SORT ? null : filter.sort);
   return next;
 }
 
 /** Whether any filter (not the sort) narrows the list. */
 export function isFiltering(filter: DashboardFilter): boolean {
-  return Boolean(filter.group || filter.state || filter.host || filter.project || filter.provider || filter.query.trim());
+  return Boolean(filter.group || filter.state || filter.host || filter.project || filter.provider || normalizeSearchQuery(filter.query));
+}
+
+/**
+ * Empty-results message naming what is narrowing the list, e.g.
+ * `No sessions match the search "deploy" with the filters Failed, docs.`
+ */
+export function noMatchMessage(query: string, filterLabels: readonly string[]): string {
+  const q = normalizeSearchQuery(query);
+  const search = q ? `the search "${q}"` : "";
+  const filters = filterLabels.length ? `${filterLabels.length === 1 ? "the filter" : "the filters"} ${filterLabels.join(", ")}` : "";
+  if (search && filters) return `No sessions match ${search} with ${filters}.`;
+  if (search || filters) return `No sessions match ${search || filters}.`;
+  return "No sessions match.";
 }
 
 /**
@@ -236,6 +252,16 @@ export function sessionAlerts(alerts: readonly StoredAlert[], sessionId: string)
   const time = (a: StoredAlert) => Date.parse(a.at) || 0;
   return alerts.filter((a) => a.sessionId === sessionId).sort((a, b) => time(b) - time(a));
 }
+
+/** Unread alert count per session id, for the dashboard cards. Host alerts (no session) are not counted. */
+export function unreadBySession(alerts: readonly StoredAlert[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const a of alerts) if (!a.read && a.sessionId) out.set(a.sessionId, (out.get(a.sessionId) ?? 0) + 1);
+  return out;
+}
+
+/** "1 unread alert", "3 unread alerts". */
+export const unreadAlertsLabel = (n: number): string => `${n} unread ${n === 1 ? "alert" : "alerts"}`;
 
 /**
  * Pairing confirmation (spec 11.3): a created code proves nothing, so success

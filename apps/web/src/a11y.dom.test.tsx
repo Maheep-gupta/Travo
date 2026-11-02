@@ -8,6 +8,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAxe } from "vitest-axe";
 import { createDemoApi, type AuthUser } from "@mc/api-client/demo";
+import { alertStorageKey } from "./alert-store.js";
 import { AlertsProvider } from "./alerts-context.js";
 import { ApiProvider, useApiContext } from "./api-context.js";
 import { DashboardPage } from "./pages/DashboardPage.js";
@@ -84,6 +85,31 @@ describe("axe smoke tests (demo mode)", () => {
     // Scan the populated page, not an empty or error state (demo data, not markup).
     expect(screen.getAllByText("Nightly data import").length).toBeGreaterThan(0);
     expect(screen.queryByRole("alert")).toBeNull();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("Dashboard with unread alerts and an active search has no violations", async () => {
+    const { container } = await renderLoaded(<DashboardPage />, "/?q=import");
+    const card = screen.getByRole("heading", { name: "Nightly data import" }).closest("a") as HTMLElement;
+    // Every demo backend has the same fixed user.
+    const user = await createDemoApi({ tickMs: 0 }).getUser();
+    if (!user) throw new Error("demo user missing");
+    const key = alertStorageKey("demo", user.id);
+    const sessionId = (card.getAttribute("href") ?? "").replace("/sessions/", "");
+    const value = JSON.stringify([{ id: "a1", kind: "failed", sessionId, hostId: "00000000-0000-4000-8000-0000000000a2", at: "2026-11-02T09:00:00.000Z", isDemo: true, read: false }]);
+    act(() => {
+      window.localStorage.setItem(key, value);
+      window.dispatchEvent(new StorageEvent("storage", { key, newValue: value }));
+    });
+    await screen.findByRole("link", { name: "1 unread alert" });
+    expect(screen.getByRole("button", { name: "Clear search" })).toBeTruthy();
+    expect(await axe(container)).toHaveNoViolations();
+    window.localStorage.removeItem(key);
+  });
+
+  it("Dashboard with a search that matches nothing has no violations", async () => {
+    const { container } = await renderLoaded(<DashboardPage />, "/?q=zzzz&state=failed");
+    expect(screen.getByText('No sessions match the search "zzzz" with the filter Failed.')).toBeTruthy();
     expect(await axe(container)).toHaveNoViolations();
   });
 

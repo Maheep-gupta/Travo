@@ -2,12 +2,13 @@
 // 3.3, 3.4) against the demo backend with a manual clock: no simulation ticks
 // and no source outage, so the seeded sessions stay put.
 import type { ReactNode } from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiProvider, useApiContext } from "../api-context.js";
-import { UserIdContext } from "../hooks.js";
+import { AlertsProvider } from "../alerts-context.js";
+import { alertStorageKey } from "../alert-store.js";
 import { DashboardPage } from "./DashboardPage.js";
 
 vi.mock("../platform.js", async (importOriginal) => {
@@ -23,16 +24,29 @@ vi.mock("../platform.js", async (importOriginal) => {
 const DEMO_USER = "00000000-0000-4000-8000-000000000001";
 let queryClient: QueryClient;
 
-afterEach(() => queryClient.clear());
+afterEach(() => {
+  queryClient.clear();
+  window.localStorage.clear();
+});
 
 function ApiReady({ children }: { children: ReactNode }) {
   const { api } = useApiContext();
-  // The demo backend's fixed user; AlertsProvider provides this in the app.
-  return api ? <UserIdContext value={DEMO_USER}>{children}</UserIdContext> : <p>Starting test backend</p>;
+  // The demo backend's fixed user, inside the same alerts boundary as the app.
+  return api ? <AlertsProvider userId={DEMO_USER}>{children}</AlertsProvider> : <p>Starting test backend</p>;
 }
 
 function LocationProbe() {
   return <output data-testid="search">{useLocation().search}</output>;
+}
+
+/** Stands in for the browser's Back button. */
+function BackButton() {
+  const navigate = useNavigate();
+  return (
+    <button type="button" onClick={() => void navigate(-1)}>
+      History back
+    </button>
+  );
 }
 
 /** Renders the dashboard and waits for the seeded demo sessions. */
@@ -47,6 +61,7 @@ async function renderDashboard(route = "/") {
               <Route path="/" element={<DashboardPage />} />
             </Routes>
             <LocationProbe />
+            <BackButton />
           </ApiReady>
         </MemoryRouter>
       </ApiProvider>
@@ -178,5 +193,123 @@ describe("DashboardPage freshness (G4)", () => {
     const fresh = offline.querySelector(".fresh") as HTMLElement;
     expect(fresh.textContent).toMatch(/^Updated \d+h ago, Stale$/);
     expect(within(offline).getByText("Stale")).toBeTruthy();
+  });
+});
+
+describe("DashboardPage search (G15)", () => {
+  const box = () => screen.getByRole("searchbox", { name: "Search sessions" }) as HTMLInputElement;
+
+  it("has a visible label and filters by title or project, case-insensitively, through the URL", async () => {
+    await renderDashboard();
+    expect(screen.getByText("Search sessions", { selector: "label" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Clear search" })).toBeNull();
+
+    fireEvent.change(box(), { target: { value: "PAYMENTS" } });
+    await waitFor(() => expect(search()).toBe("?q=PAYMENTS"));
+    expect(cardTitles()).toEqual(["Refactor auth middleware", "Write migration for invoices"]);
+    expect(screen.getByText('Showing 2 of 7 sessions, "PAYMENTS"').getAttribute("aria-live")).toBe("polite");
+
+    // Title match; the box keeps the trailing space while the URL holds the trimmed query.
+    fireEvent.change(box(), { target: { value: "memory " } });
+    await waitFor(() => expect(search()).toBe("?q=memory"));
+    expect(box().value).toBe("memory ");
+    expect(cardTitles()).toEqual(["Investigate memory leak"]);
+  });
+
+  it("combines with the other filters and names them when nothing matches", async () => {
+    await renderDashboard("/?state=failed");
+    fireEvent.change(box(), { target: { value: "release" } });
+    await waitFor(() => expect(search()).toBe("?state=failed&q=release"));
+    expect(screen.getByRole("heading", { name: "Nothing matches" })).toBeTruthy();
+    expect(screen.getByText('No sessions match the search "release" with the filter Failed.')).toBeTruthy();
+
+    // Clearing only the search keeps the state filter.
+    fireEvent.click(within(document.querySelector(".state") as HTMLElement).getByRole("button", { name: "Clear search" }));
+    await waitFor(() => expect(search()).toBe("?state=failed"));
+    expect(cardTitles()).toEqual(["Investigate memory leak"]);
+    expect(box().value).toBe("");
+  });
+
+  it("clears with the clear button, and Back brings the search back", async () => {
+    await renderDashboard();
+    fireEvent.change(box(), { target: { value: "docs" } });
+    await waitFor(() => expect(search()).toBe("?q=docs"));
+    expect(cardTitles()).toEqual(["Draft release notes"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    await waitFor(() => expect(search()).toBe(""));
+    expect(box().value).toBe("");
+    expect(document.activeElement).toBe(box());
+    expect(cardTitles()).toHaveLength(7);
+
+    fireEvent.click(screen.getByRole("button", { name: "History back" }));
+    await waitFor(() => expect(search()).toBe("?q=docs"));
+    expect(box().value).toBe("docs");
+    expect(cardTitles()).toEqual(["Draft release notes"]);
+  });
+
+  it("reads a trimmed query from the URL", async () => {
+    await renderDashboard("/?q=%20%20storefront%20");
+    expect(box().value).toBe("storefront");
+    expect(cardTitles()).toEqual(["Fix flaky checkout e2e test"]);
+  });
+
+  it("ignores a query with control characters", async () => {
+    await renderDashboard("/?q=x%00y");
+    expect(box().value).toBe("");
+    expect(cardTitles()).toEqual(ATTENTION_ORDER);
+    expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();
+  });
+});
+
+describe("DashboardPage unread alerts (G14)", () => {
+  const card = (title: string) => screen.getByRole("heading", { name: title }).closest(".session-card") as HTMLElement;
+  const idOf = (title: string) => (card(title).getAttribute("href") ?? "").replace("/sessions/", "");
+  const KEY = alertStorageKey("demo", DEMO_USER);
+
+  /** Writes alerts as another tab would; the store picks them up from the storage event. */
+  function storeAlerts(alerts: { id: string; sessionId: string | null; read: boolean }[]) {
+    const value = JSON.stringify(
+      alerts.map((a) => ({ ...a, kind: a.sessionId ? "failed" : "host_disconnected", hostId: "00000000-0000-4000-8000-0000000000a1", at: "2026-11-02T09:00:00.000Z", isDemo: true })),
+    );
+    act(() => {
+      window.localStorage.setItem(KEY, value);
+      window.dispatchEvent(new StorageEvent("storage", { key: KEY, newValue: value }));
+    });
+  }
+
+  it("shows nothing when there are no unread alerts", async () => {
+    await renderDashboard();
+    expect(screen.queryByText(/unread alert/)).toBeNull();
+    expect(document.querySelector(".has-unread")).toBeNull();
+  });
+
+  it("summarises unread alerts with a link to Alerts and labels the cards in text", async () => {
+    await renderDashboard();
+    const failed = idOf("Investigate memory leak");
+    const waiting = idOf("Write migration for invoices");
+    storeAlerts([
+      { id: "a1", sessionId: failed, read: false },
+      { id: "a2", sessionId: failed, read: false },
+      { id: "a3", sessionId: waiting, read: true },
+      { id: "a4", sessionId: null, read: false },
+    ]);
+
+    // Host alerts count in the total; read ones don't.
+    const link = await screen.findByRole("link", { name: "3 unread alerts" });
+    expect(link.getAttribute("href")).toBe("/alerts");
+    expect(within(card("Investigate memory leak")).getByText("2 unread alerts")).toBeTruthy();
+    expect(card("Investigate memory leak").classList.contains("has-unread")).toBe(true);
+    expect(within(card("Write migration for invoices")).queryByText(/unread alert/)).toBeNull();
+    expect(document.querySelectorAll(".has-unread")).toHaveLength(1);
+
+    // Marked read elsewhere: everything disappears.
+    storeAlerts([
+      { id: "a1", sessionId: failed, read: true },
+      { id: "a2", sessionId: failed, read: true },
+      { id: "a4", sessionId: null, read: true },
+    ]);
+    await waitFor(() => expect(screen.queryByText(/unread alert/)).toBeNull());
+    expect(document.querySelector(".has-unread")).toBeNull();
   });
 });

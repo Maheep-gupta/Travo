@@ -15,10 +15,10 @@ The requirements source is `docs/PRODUCT_SPEC.md`. Status for every requirement 
 
 **Next cycle** (G numbers are in GAP_ANALYSIS; session continuity is in `docs/EXECUTION_STATE.md`):
 1. **G13, reliability edges.** The request timeout is done (20 s). Still to do: partial-data presentation when one query fails. A sleep/resume test.
-2. **G19, phone-access local preparation.** A `_headers` template, a deployment runbook, a "project paused or unreachable" state and refetch when the page becomes visible. Deployment itself needs authorization (`docs/PHONE_ACCESS.md`).
-3. **G14** unread alerts on the dashboard; **G15** text search.
-4. **G16** collapsing notification bursts; **G17** bundle budget; **G18** moving pure web logic into `@mc/domain`.
-5. **G20** auth backlog M2, L1, L3.
+2. **G16** collapsing notification bursts; **G18** moving pure web logic into `@mc/domain`; a "project paused" message.
+3. **G20** auth backlog M2, L1, L3.
+
+**Also done 2026-11-02:** G13 request timeout, G14 unread alerts on the dashboard, G15 search, G17 bundle budget (`npm run check:release`), and G19 deployment preparation (`deploy/cloudflare/_headers`, `docs/DEPLOYMENT.md`). Deployment itself needs authorization.
 
 **Done 2026-11-02 (third cycle):** G4 (visible freshness), G5 (offline banner), G7 (session ↔ alerts), G10 (Settings Account, Privacy & data, Integrations and Application sections; Setup onboarding; pairing confirmation) and G12 (schema v3 stale-write guard, D-015). The theme script moved to a file so a strict CSP is possible. Phone-access architecture is in `docs/PHONE_ACCESS.md`.
 - Fixes from the QA and security reviews:

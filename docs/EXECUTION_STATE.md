@@ -9,7 +9,7 @@ Continuity between sessions. Update it at the end of every cycle. Requirements a
 - **Branch:** `main`. The local commits are ahead of `origin/main` (public). They are **not pushed**, because a push needs founder authorization (D-017).
 - **Schema:** v3 (`supabase/migrations/20261103000001_stale_write_guard.sql`). Clients require exactly v3.
 - **Gates at the last commit:**
-  - `npm run check` (typecheck, lint and 355 tests) passes.
+  - `npm run check` (typecheck, lint and 386 tests) passes. `npm run check:release` (check, build, `check:dist` with bundle budgets) passes.
   - `npm run build -w @mc/web` passes.
   - `test:db` and `test:e2e` have never run.
 
@@ -44,8 +44,10 @@ Continuity between sessions. Update it at the end of every cycle. Requirements a
 ## Next actions (in order)
 
 1. **G13, reliability edges.** The request timeout is done. Still to do: present partial data when one query fails, and add a sleep/resume test.
-2. **G19, phone-access local preparation.** A `_headers` template, a deployment runbook, a "project paused or unreachable" state, and refetch when the page becomes visible.
-3. **G14, G15, G16, G17, G18, G20.** See `GAP_ANALYSIS.md`.
+2. **G16** collapsing notification bursts, **G18** moving pure web logic into `@mc/domain`, **G20** auth backlog, and a "project paused" message (rest of G19).
+3. When authorized: follow `docs/DEPLOYMENT.md`.
+
+Also done late in this cycle: G13 request timeout, G14 unread alerts on the dashboard, G15 search, G17 bundle budget and `check:dist`, G19 `_headers` template and deployment runbook.
 
 **How to continue:**
 1. Read this file, `ROADMAP.md` and `GAP_ANALYSIS.md`.

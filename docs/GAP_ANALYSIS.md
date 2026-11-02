@@ -3,7 +3,7 @@
 **Requirements source:** `docs/PRODUCT_SPEC.md` v1.0. Requirement IDs are the spec section numbers (D-016).
 **Last updated:** 2026-11-02, third cycle.
 **Owner:** product-manager role; statuses updated by the main session after integrating each cycle.
-**Test baseline:** `npm test` passes 355 tests (unit and dom/jsdom, including axe checks without colour contrast). `test:db` has never run (Docker is blocked), and neither has `test:e2e` (browser automation is blocked).
+**Test baseline:** `npm test` passes 386 tests (unit and dom/jsdom, including axe checks without colour contrast). `test:db` has never run (Docker is blocked), and neither has `test:e2e` (browser automation is blocked).
 
 **Status labels** (spec Part 19):
 - Not started · In progress · Implemented · Automated-test verified · Browser/device verified · Security verified · Production ready
@@ -26,12 +26,12 @@
 | 3.2 | Last successful source update on cards, separate from activity, with a stale marker | Automated-test verified | `freshness.test.ts`, `DashboardPage.dom.test.tsx`. Capped by the client's own fetch time (QA H1 fix). |
 | 3.2 | No absolute paths or home-folder names | Automated-test verified | `claude-code.test.ts` "projectLabelFromCwd" |
 | 3.3 | Filters by state, host, project and provider in the URL; invalid values ignored | Automated-test verified | `view-model.test.ts`, `DashboardPage.dom.test.tsx` |
-| 3.3 | Text search | Not started | **G15** |
+| 3.3 | Text search (title, project) in the URL | Automated-test verified | `domain.test.ts` search, `view-model.test.ts`, `DashboardPage.dom.test.tsx` |
 | 3.4 | Attention, then recency; six sort orders; deterministic tie-break | Automated-test verified | `domain.test.ts` "filtering and ordering" |
 | 3.5 | Loading, empty, error states | Automated-test verified | page dom tests, `components.dom.test.tsx` |
 | 3.5 | Offline; auth expired | Automated-test verified | `offline-banner.dom.test.tsx`, `connectivity.test.ts`, `auth.dom.test.tsx` |
 | 3.5 | No hosts vs no sessions; partial data (one query failing) | Implemented | Empty states differ; partial-data presentation is untested → **G13** |
-| 3.5 | Unread alerts on the dashboard | Not started | **G14** |
+| 3.5 | Unread alerts on the dashboard | Automated-test verified | `DashboardPage.dom.test.tsx`, `view-model.test.ts` `unreadBySession` |
 | 3.5 | Demo data never looks real | Automated-test verified | `demo.test.ts`, `api-client.test.ts` |
 
 ### Sessions (Part 4)
@@ -114,7 +114,7 @@
 ### Performance (Part 17)
 | ID | Requirement | Status | Evidence / remaining |
 |---|---|---|---|
-| 17 | Lazy routes; bundle budget | Implemented | Pages lazy-load. There's no automated size budget → **G17** |
+| 17 | Lazy routes; bundle budget | Automated-test verified (release gate) | `npm run check:release` → `scripts/check-dist.mjs` budgets (entry 86 kB, other chunks 70 kB, total 270 kB gzip; measured 70.6, 56.9 and 221.1). Not part of the per-commit `npm run check`. |
 
 ## Prioritized gaps
 
@@ -123,12 +123,12 @@ Done: G1–G12 (G1, G2, G3, G6, G8, G9 and G11 in cycles 1–2; G4, G5, G7, G10 
 | # | Gap | Depends on | Notes |
 |---|---|---|---|
 | G13 | Reliability edges: ~~request timeout~~ (done 2026-11-02: `withRequestTimeout`, `request-timeout.test.ts`); partial-data presentation; sleep/resume test | — | Spec 3.5, 16 |
-| G14 | Unread alerts on the dashboard (G6 leftover) | — | Spec 3.5 |
-| G15 | Dashboard text search (title or project) | — | Spec 3.3, directive §5A |
+| G14 | Unread alerts on the dashboard | — | **Done 2026-11-02** |
+| G15 | Dashboard text search | — | **Done 2026-11-02** |
 | G16 | Collapse notification bursts | — | Spec 5.7, 16 |
-| G17 | Automated bundle-size budget in `npm run check` | — | Spec 17 |
+| G17 | Bundle budget and build hygiene | — | **Done 2026-11-02** (`check:release`) |
 | G18 | Move pure web logic (`pairingStatus`, `connectivity.ts`) into `@mc/domain` for Expo reuse | — | Maintainability |
-| G19 | Phone-access local preparation: `_headers` template, deployment runbook, "project paused or unreachable" state, refetch when visible | — | `docs/PHONE_ACCESS.md`. Deployment itself needs authorization. |
+| G19 | Phone-access local preparation | — | **Done 2026-11-02:** `deploy/cloudflare/_headers` (CSP report-only), `docs/DEPLOYMENT.md` runbook, `check:dist`. Still open: a "project paused" message. Deployment itself needs authorization. |
 | G20 | Auth backlog M2, L1, L3 (from the 2026-11-02 security review) | — | See ROADMAP backlog |
 
 ## Founder decisions pending
@@ -143,3 +143,4 @@ Done: G1–G12 (G1, G2, G3, G6, G8, G9 and G11 in cycles 1–2; G4, G5, G7, G10 
 9. Transcript excerpts: confirm D-004 against spec 4.3.
 10. Open sign-ups in BYOS projects: confirm the guidance to disable them after creating the owner account.
 11. Pushing the local commits to the public repo.
+12. How to run `test:db` before a deployment: on a machine where Docker works (recommended), or against a throwaway hosted project, which needs a helpers change that isn't written (`docs/DEPLOYMENT.md` step 4).

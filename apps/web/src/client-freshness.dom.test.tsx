@@ -24,6 +24,13 @@ vi.mock("./platform.js", async (importOriginal) => {
   };
 });
 
+// No AlertsProvider here: its watcher polls sessions and hosts, which these
+// tests must control. The dashboard only reads the (empty) alert list.
+vi.mock("./alerts-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./alerts-context.js")>()),
+  useAlerts: () => [],
+}));
+
 const DEMO_USER = "00000000-0000-4000-8000-000000000001";
 const LAPTOP_SESSION = "Refactor auth middleware";
 let queryClient: QueryClient;

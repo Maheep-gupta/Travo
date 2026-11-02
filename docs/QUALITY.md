@@ -6,7 +6,7 @@
 |---|---|---|
 | Type check (strict, all workspaces and DB tests) | `npm run typecheck` | Available |
 | Lint, including the platform-neutrality rules for `@mc/domain` | `npm run lint` | Available |
-| Unit and component tests (vitest "unit" in Node, "dom" in jsdom) | `npm test` | Available. 355 tests as of 2026-11-02 (third cycle), including axe accessibility checks (jsdom; no colour contrast). Component tests use jsdom, not a real browser, so layout, CSS and real notification APIs aren't covered. |
+| Unit and component tests (vitest "unit" in Node, "dom" in jsdom) | `npm test` | Available. 386 tests as of 2026-11-02 (third cycle), including axe accessibility checks (jsdom; no colour contrast). Component tests use jsdom, not a real browser, so layout, CSS and real notification APIs aren't covered. |
 | Production web build | `npm run build -w @mc/web` | Available |
 | Browser checks (65) | `npm run test:e2e` | **Unavailable.** Endpoint protection kills headless Chrome and Edge. |
 | RLS and isolation tests | `npm run test:db` | **Unavailable.** The Docker engine doesn't respond. |
@@ -45,8 +45,32 @@ When reporting results, label each check as **automated** (it ran), **synthetic*
    - `/assets/*` (content-hashed): `Cache-Control: public, max-age=31536000, immutable`.
    - `index.html` and `manifest.webmanifest`: `no-cache`.
 4. **Serve over HTTPS.** This is required for installation and notifications. Loopback is exempt.
+5. **Send the security headers** in `deploy/cloudflare/_headers`.
+   - The template is kept out of `apps/web/public` so the build never ships it. It is copied into `dist/` at deploy time (`docs/DEPLOYMENT.md` step 7).
+   - CSP starts as `Content-Security-Policy-Report-Only` and becomes enforcing only after a manual browser check (step 10).
+   - The template also marks the unhashed `/theme-init.js` as `no-cache`, and adds a `/` rule.
 
-Deployment itself still needs approval (D-005).
+**Release gate for the built files:** `npm run check:dist`, or `npm run check:release`, which runs `check`, then the build, then `check:dist`. The script is `scripts/check-dist.mjs`, with unit tests in `scripts/check-dist.test.mjs`. It fails if:
+- `index.html` has an inline script, an inline style, or a `style=` or `on*=` attribute;
+- a file references something that isn't in `dist`;
+- the manifest or icons are incomplete (installability itself still needs a browser);
+- any text file contains a secret-looking value (an `sb_secret_…` value, a JWT or base64 JSON, a service-role key assignment, a private-key block, a Postgres URL with a password) or a local path (`C:\Users`, `/home/…`, `/Users/…`, `file:///`);
+- a source map or `sourceMappingURL` ships;
+- a service worker is registered (D-011);
+- `dist/_headers`, if present, differs from the template;
+- the gzip budget is exceeded.
+
+**Bundle budget (G17).** gzip level 9, 1 kB = 1000 B. Set 2026-11-02 at about 20% above the measured build:
+
+| Budget | Limit | Measured 2026-11-02 |
+|---|---|---|
+| Entry chunk (`index-*.js`) | 86 kB | 70.6 kB |
+| Any other chunk or CSS | 70 kB | 56.9 kB (`supabase-entry`, Supabase mode only) |
+| All JS + CSS | 270 kB | 220.9 kB |
+
+Raise a budget only deliberately, with a note here. `check:dist` isn't part of `npm run check`, because it needs a fresh build. Run `check:release` before any release.
+
+Deployment itself still needs approval (D-005, D-017). The runbook is `docs/DEPLOYMENT.md`.
 
 ## Dependency licences
 
@@ -70,9 +94,11 @@ There are no copyleft or unknown third-party licences. Dev-only tools are exclud
 | Privacy | No transcript or session text in storage, caches, notifications or logs | Reviewed per change |
 | Accessibility | Keyboard paths, focus, labels, live regions, reduced motion, contrast in both themes | Code review only |
 | Responsive | No overflow at 360/390 px; touch targets of at least 44 px | Code review only (e2e blocked) |
-| Performance | Bundle sizes recorded; route-level splitting | Baseline 2026-10-30: entry chunk 232 kB raw / 72 kB gzip; Supabase chunk 220 / 57 kB (Supabase mode only); Alerts page 3.6 kB |
-| PWA | Manifest, icons, installability, update behaviour | Manifest complete and PNG and maskable icons generated (verified by the build). Installability, maskable rendering and iOS appearance unverified because no browser is available. No service worker (D-011), so there's no update or caching risk. |
+| Performance | Bundle sizes recorded; route-level splitting; automated budget | **Automated** (`check:dist`, 2026-11-02): entry 228 kB raw / 70.6 kB gzip (budget 86); Supabase chunk 221 / 56.9 kB (budget 70 per chunk); all JS + CSS 745 / 220.9 kB (budget 270). Pages lazy-load. Real-network load time unmeasured. |
+| PWA | Manifest, icons, installability, update behaviour | Manifest fields, PNG, maskable and apple-touch icons, and the links in `index.html` are **automated** (`check:dist`). Installability, maskable rendering and iOS appearance are **unverified** because no browser is available (`DEPLOYMENT.md` step 9, checks 7–8). No service worker (D-011, enforced by `check:dist`), so there's no update or caching risk. |
+| Build hygiene | No inline code (CSP), secrets, local paths, source maps or service worker in `dist` | **Automated** (`check:dist`, 2026-11-02; passes on the current build). Pattern-based, so a secret in an unusual format could slip through. |
+| Security headers | CSP, HSTS, `nosniff`, referrer, permissions, COOP, frame denial | Template ready: `deploy/cloudflare/_headers`, with CSP in Report-Only. Not served anywhere. Header delivery, deep-link cache rules and CSP violations are **unverified** until `DEPLOYMENT.md` step 9 (checks 1, 3, 5). |
 | Errors and observability | No third-party telemetry. Errors are mapped to safe messages. | Partial |
 | Docs | README, BYOS, SECURITY and this file are current | Ongoing |
 | Dependencies | Pinned lockfile; licence review | Licences reviewed (all permissive). `npm audit` not run (needs approval). The project's own licence isn't chosen yet. |
-| Deployment and rollback | Not applicable until a deployment is approved | 🔒 |
+| Deployment and rollback | Runbook with authorization gates, post-deploy checks and rollback | Runbook written (`docs/DEPLOYMENT.md`); nothing executed. 🔒 Every provider step needs founder authorization (D-005, D-017). `test:db` targets only the local stack (see runbook step 4). |

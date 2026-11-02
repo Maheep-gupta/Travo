@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import {
   PROVIDERS,
@@ -8,15 +8,18 @@ import {
   freshnessLabel,
   isSessionSort,
   needsAttention,
+  normalizeSearchQuery,
   relativeTime,
+  unreadCount,
   type DisplayStatus,
   type Freshness,
   type SessionSort,
 } from "@mc/domain";
+import { useAlerts } from "../alerts-context.js";
 import { useApi } from "../api-context.js";
 import { DemoTag, EmptyState, ErrorState, PageHeader, SessionListSkeleton, StatusBadge } from "../components.js";
 import { useHosts, useNow, useSessionViews } from "../hooks.js";
-import { IconClock, IconFolder, IconHost, IconSearch, IconSessions } from "../icons.js";
+import { IconBell, IconClock, IconClose, IconFolder, IconHost, IconSearch, IconSessions } from "../icons.js";
 import {
   EMPTY_DASHBOARD_FILTER,
   EXTRA_STATES,
@@ -27,8 +30,11 @@ import {
   countByState,
   dashboardFilterParams,
   isFiltering,
+  noMatchMessage,
   parseDashboardFilter,
   projectOptions,
+  unreadAlertsLabel,
+  unreadBySession,
   type DashboardFilter,
   type SessionView,
 } from "../view-model.js";
@@ -48,13 +54,40 @@ export function DashboardPage() {
   const hostKnown = parsed.host !== null && (hosts.data ?? []).some((h) => h.id === parsed.host);
   const filter: DashboardFilter = hostKnown ? parsed : { ...parsed, host: null };
   const { group, state, host, project, provider, query, sort } = filter;
+  const alerts = useAlerts();
+  const unread = unreadCount(alerts);
+  const unreadBySessionId = useMemo(() => unreadBySession(alerts), [alerts]);
 
-  // Toggles, selects and sort are history steps (Back undoes them);
+  // Toggles, selects, sort and the clear buttons are history steps (Back undoes them);
   // typing in search replaces the entry so each keystroke isn't one.
   const update = (patch: Partial<DashboardFilter>, mode: "push" | "replace") =>
     setParams(dashboardFilterParams({ ...filter, ...patch }, params), { replace: mode === "replace" });
+
+  // The box keeps exactly what was typed (spaces included); the URL holds the
+  // trimmed query. When the URL changes another way (Back/Forward, a clear
+  // button), the box follows it.
+  const searchId = useId();
+  const searchInput = useRef<HTMLInputElement>(null);
+  const [draft, setDraft] = useState(query);
+  const [shownQuery, setShownQuery] = useState(query);
+  if (query !== shownQuery) {
+    setShownQuery(query);
+    if (normalizeSearchQuery(draft) !== query) setDraft(query);
+  }
+  const onSearch = (value: string) => {
+    setDraft(value);
+    if (normalizeSearchQuery(value) !== query) update({ query: value }, "replace");
+  };
+  const clearSearch = () => {
+    setDraft("");
+    if (query) update({ query: "" }, "push");
+    searchInput.current?.focus();
+  };
   // Clearing filters keeps the chosen sort.
-  const clearFilters = () => setParams(dashboardFilterParams({ ...EMPTY_DASHBOARD_FILTER, sort }, params));
+  const clearFilters = () => {
+    setDraft("");
+    setParams(dashboardFilterParams({ ...EMPTY_DASHBOARD_FILTER, sort }, params));
+  };
 
   const counts = useMemo(() => countByState(data ?? []), [data]);
   const providersPresent = useMemo(() => [...new Set((data ?? []).map((s) => s.provider))], [data]);
@@ -69,14 +102,14 @@ export function DashboardPage() {
   const attention = sort === "attention" ? filtered.filter((s) => needsAttention(s.displayStatus)) : [];
   const rest = sort === "attention" ? filtered.filter((s) => !needsAttention(s.displayStatus)) : filtered;
 
-  const activeLabels = [
+  const filterLabels = [
     group && STATUS_GROUPS[group].label,
     state && STATUS_LABEL[state],
     host && hostOptions.find((h) => h.id === host)?.name,
     project,
     provider && PROVIDERS[provider].label,
-    query.trim() && `"${query.trim()}"`,
   ].filter((l): l is string => Boolean(l));
+  const activeLabels = query ? [...filterLabels, `"${query}"`] : filterLabels;
 
   const allSelected = !group && !state;
   const toggleState = (s: DisplayStatus) => update({ group: null, state: state === s && !group ? null : s }, "push");
@@ -91,6 +124,14 @@ export function DashboardPage() {
           <>Live status from your paired hosts. Sessions that need you are listed first.</>
         )}
       </PageHeader>
+
+      {/* Alerts are stored on this device, so they show even while sessions load or fail. */}
+      {unread > 0 && (
+        <p className="unread-summary">
+          <IconBell />
+          <Link to="/alerts">{unreadAlertsLabel(unread)}</Link>
+        </p>
+      )}
 
       {isLoading ? (
         <SessionListSkeleton />
@@ -141,18 +182,30 @@ export function DashboardPage() {
           </div>
 
           <div className="toolbar dashboard-toolbar">
-            <label className="search">
-              <span className="sr-only">Search sessions</span>
-              <IconSearch />
-              <input
-                className="input"
-                type="search"
-                placeholder="Search title, project or activity"
-                value={query}
-                maxLength={MAX_QUERY_LENGTH}
-                onChange={(e) => update({ query: e.target.value }, "replace")}
-              />
-            </label>
+            <div className="search-field">
+              <label className="field-label" htmlFor={searchId}>
+                Search sessions
+              </label>
+              <div className="search">
+                <IconSearch />
+                <input
+                  id={searchId}
+                  ref={searchInput}
+                  className="input"
+                  type="search"
+                  placeholder="Title or project"
+                  autoComplete="off"
+                  value={draft}
+                  maxLength={MAX_QUERY_LENGTH}
+                  onChange={(e) => onSearch(e.target.value)}
+                />
+                {draft && (
+                  <button type="button" className="search-clear" aria-label="Clear search" onClick={clearSearch}>
+                    <IconClose />
+                  </button>
+                )}
+              </div>
+            </div>
             <label>
               <span className="sr-only">Host</span>
               <select className="select" value={host ?? ""} onChange={(e) => update({ host: e.target.value || null }, "push")}>
@@ -233,16 +286,25 @@ export function DashboardPage() {
           ) : filtered.length === 0 ? (
             <div className="section">
               <EmptyState title="Nothing matches" icon={<IconSearch />}>
-                <p>Try a different search or clear the filters.</p>
-                <button type="button" className="btn" onClick={clearFilters}>
-                  Clear filters
-                </button>
+                <p>{noMatchMessage(query, filterLabels)}</p>
+                <div className="actions">
+                  {query && filterLabels.length > 0 && (
+                    <button type="button" className="btn ghost" onClick={clearSearch}>
+                      Clear search
+                    </button>
+                  )}
+                  <button type="button" className="btn" onClick={clearFilters}>
+                    {filterLabels.length ? "Clear filters" : "Clear search"}
+                  </button>
+                </div>
               </EmptyState>
             </div>
           ) : (
             <>
-              {attention.length > 0 && <SessionSection title="Needs you" sessions={attention} now={now} />}
-              {rest.length > 0 && <SessionSection title={attention.length ? "Everything else" : "Sessions"} sessions={rest} now={now} />}
+              {attention.length > 0 && <SessionSection title="Needs you" sessions={attention} now={now} unread={unreadBySessionId} />}
+              {rest.length > 0 && (
+                <SessionSection title={attention.length ? "Everything else" : "Sessions"} sessions={rest} now={now} unread={unreadBySessionId} />
+              )}
             </>
           )}
         </>
@@ -258,7 +320,18 @@ function headline(data: SessionView[] | undefined, attention: number): string {
   return attention === 1 ? "1 session needs you." : `${attention} sessions need you.`;
 }
 
-export function SessionSection({ title, sessions, now }: { title: string; sessions: SessionView[]; now: Date }) {
+export function SessionSection({
+  title,
+  sessions,
+  now,
+  unread,
+}: {
+  title: string;
+  sessions: SessionView[];
+  now: Date;
+  /** Unread alerts per session id; cards with any say so. */
+  unread?: ReadonlyMap<string, number>;
+}) {
   const id = `section-${title.replace(/\W+/g, "-").toLowerCase()}`;
   return (
     <section className="section" aria-labelledby={id}>
@@ -269,7 +342,7 @@ export function SessionSection({ title, sessions, now }: { title: string; sessio
       <ul className="session-list grid">
         {sessions.map((s) => (
           <li key={s.id}>
-            <SessionCard session={s} now={now} />
+            <SessionCard session={s} now={now} unreadAlerts={unread?.get(s.id) ?? 0} />
           </li>
         ))}
       </ul>
@@ -277,13 +350,22 @@ export function SessionSection({ title, sessions, now }: { title: string; sessio
   );
 }
 
-export function SessionCard({ session: s, now }: { session: SessionView; now: Date }) {
+export function SessionCard({ session: s, now, unreadAlerts = 0 }: { session: SessionView; now: Date; unreadAlerts?: number }) {
   const attention = needsAttention(s.displayStatus);
   return (
-    <Link to={`/sessions/${s.id}`} className={`session-card st-${s.displayStatus} ${attention ? "attention" : ""}`}>
+    <Link
+      to={`/sessions/${s.id}`}
+      className={`session-card st-${s.displayStatus} ${attention ? "attention" : ""} ${unreadAlerts > 0 ? "has-unread" : ""}`}
+    >
       <div className="sc-top">
         <StatusBadge status={s.displayStatus} />
         {s.is_demo && <DemoTag />}
+        {unreadAlerts > 0 && (
+          <span className="unread-tag">
+            <IconBell />
+            {unreadAlertsLabel(unreadAlerts)}
+          </span>
+        )}
         <span className="sc-time" title={s.last_activity_at ? `Last activity ${new Date(s.last_activity_at).toLocaleString()}` : undefined}>
           <span className="sr-only">Last activity </span>
           {relativeTime(s.last_activity_at, now)}
