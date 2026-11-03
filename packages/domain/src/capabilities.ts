@@ -22,7 +22,10 @@ export const PROVIDERS: Record<ProviderId, ProviderDescriptor> = {
   "claude-code": {
     id: "claude-code",
     label: "Claude Code (local)",
-    supported: ["discover", "get_details", "read_messages", "subscribe_events"],
+    // Only what ClaudeCodeProvider actually implements (apps/connector). It
+    // reads session status through the CLI; it doesn't read transcripts or
+    // stream events, so it must not claim to (spec 8).
+    supported: ["discover", "get_details"],
     limitation:
       "Replying is disabled: there is no supported API for injecting messages into a running terminal or IDE session, and your organisation has disabled Remote Control.",
     continueIn: "Continue in the terminal or VS Code window where the session is running.",

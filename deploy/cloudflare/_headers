@@ -3,33 +3,42 @@
 #
 # NOT shipped by the build. This file deliberately lives outside apps/web/public
 # so it can't reach a host before deployment is authorized (D-005, D-017).
-# At deploy time it is copied into apps/web/dist/ (docs/DEPLOYMENT.md, step 7),
-# and `npm run check:dist` then verifies the copy matches this template.
+# At deploy time `node scripts/generate-headers.mjs` writes apps/web/dist/_headers
+# from this template (docs/DEPLOYMENT.md, step 7), and `npm run check:dist` then
+# verifies the copy matches this template or its generated form.
+#
+# connect-src: this template allows any *.supabase.co project, because BYOS means
+# the project URL isn't known at build time. The generator replaces the wildcard
+# with the one project's exact origin (--project-url). Ship the wildcard only when
+# asked for it (--wildcard). Never add loopback origins; they belong only in dev
+# and preview.
 #
 # CSP starts as Content-Security-Policy-Report-Only: violations are logged to the
 # browser DevTools console but nothing is blocked, and there is no report-uri, so
-# no violation data leaves the browser. Switch to enforcing only after the manual
-# browser check in docs/DEPLOYMENT.md step 9 shows no violations in Demo mode and
-# Supabase mode (sign-in, Realtime, every route, light and dark theme): rename the
-# header to "Content-Security-Policy", keep the value unchanged, redeploy, re-check.
+# no violation data leaves the browser. Switch to enforcing within the window set
+# in docs/DEPLOYMENT.md step 10, after the manual browser check in step 9 shows no
+# violations in Demo mode and Supabase mode (sign-in, Realtime, every route, light
+# and dark theme).
 # Expected console note while Report-Only: browsers ignore upgrade-insecure-requests
 # in a report-only policy. That is harmless; the site is HTTPS-only anyway.
 #
 # script-src 'self' needs no hash: the pre-paint theme script is public/theme-init.js.
-# connect-src allows any *.supabase.co project because BYOS means the project URL
-# isn't known at build time; Supabase custom domains are therefore unsupported.
-# Never add loopback origins here; they belong only in dev and preview.
+# worker-src 'none': Tavro registers no service worker or worker (D-011).
+# require-trusted-types-for / trusted-types 'none': no code may write HTML or script
+# URLs into DOM sinks. Report-Only first, to learn whether React or supabase-js
+# trips it (unverified); support outside Chromium-based browsers is unverified.
 #
 # Do not set Cache-Control under /*: Cloudflare joins values when several rules
 # match, which would corrupt the /assets/* rule.
 
 /*
-  Content-Security-Policy-Report-Only: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; upgrade-insecure-requests
+  Content-Security-Policy-Report-Only: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; manifest-src 'self'; worker-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; require-trusted-types-for 'script'; trusted-types 'none'; upgrade-insecure-requests
   Strict-Transport-Security: max-age=63072000; includeSubDomains
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
-  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()
   Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
   X-Frame-Options: DENY
 
 /assets/*

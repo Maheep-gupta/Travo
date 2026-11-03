@@ -14,6 +14,7 @@ import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { dirname, join, relative, extname, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { expectedHeaders, generatedFor } from "./generate-headers.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -205,14 +206,24 @@ function main(distDir) {
     if (SERVICE_WORKER_RE.test(text)) fail(`${name}: registers a service worker (D-011)`);
   }
 
-  // 4. Optional deploy-time _headers (copied in by docs/DEPLOYMENT.md, never by the build).
+  // 4. Optional deploy-time _headers (written by scripts/generate-headers.mjs at
+  //    deploy time, docs/DEPLOYMENT.md step 7; never by the build).
   if (inDist("/_headers")) {
     const shipped = readFileSync(join(distDir, "_headers"), "utf8");
     const template = join(ROOT, "deploy", "cloudflare", "_headers");
-    if (existsSync(template) && readFileSync(template, "utf8") !== shipped) {
-      fail("dist/_headers differs from deploy/cloudflare/_headers");
+    if (existsSync(template)) {
+      let expected = null;
+      try {
+        expected = expectedHeaders(readFileSync(template, "utf8"), shipped);
+      } catch (e) {
+        fail(`dist/_headers: ${e.message}`);
+      }
+      if (expected !== null && expected !== shipped) {
+        fail("dist/_headers differs from deploy/cloudflare/_headers (regenerate it with scripts/generate-headers.mjs)");
+      }
     }
-    console.log(`_headers present; CSP mode: ${cspMode(shipped)}`);
+    const origin = generatedFor(shipped);
+    console.log(`_headers present; CSP mode: ${cspMode(shipped)}; connect-src: ${origin ? `project ${origin}` : "wildcard *.supabase.co"}`);
   } else {
     console.log("_headers not present (expected before deployment staging)");
   }

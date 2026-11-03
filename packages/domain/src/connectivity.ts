@@ -145,6 +145,25 @@ export function formatDataTime(at: number, now: number, locale?: string, timeZon
   return new Intl.DateTimeFormat(locale, { ...time, day: "numeric", month: "short" }).format(at);
 }
 
+/**
+ * The top bar's backend indicator. It must agree with the banner: "Connected"
+ * only while the data is current (spec 2.1, 13.4).
+ */
+export function connectionIndicator(f: ConnectionState): { tone: "ok" | "warn" | "down"; text: string; label: string } {
+  switch (f.kind) {
+    case "current":
+      return { tone: "ok", text: "Supabase", label: "Connected to your Supabase project" };
+    case "offline":
+      return { tone: "down", text: "Offline", label: "Offline: showing earlier data" };
+    case "unreachable":
+      if (f.cause === "paused") return { tone: "down", text: "Paused", label: "Your Supabase project is paused" };
+      if (f.cause === "error") return { tone: "warn", text: "Not refreshing", label: "Your Supabase project answered, but Tavro couldn't refresh your data" };
+      return { tone: "down", text: "Unreachable", label: "Can't reach your Supabase project" };
+    case "stale":
+      return { tone: "warn", text: "Not updated", label: "Your data hasn't been updated recently" };
+  }
+}
+
 /** Banner text, or null when the data is current. Never claims the data is live. */
 export function connectionMessage(f: ConnectionState, formatTime: (at: number) => string): { title: string; detail: string } | null {
   switch (f.kind) {

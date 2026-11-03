@@ -8,6 +8,7 @@ import type { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   anon,
+  applySeed,
   as,
   createAuthUser,
   createOwner,
@@ -17,6 +18,7 @@ import {
   insertSql,
   migrationFiles,
   pairHost,
+  realtimeAccess,
   redeem,
   sessionRow,
   startPairing,
@@ -50,6 +52,8 @@ function upsertAs(who: Principal, rows: Record<string, unknown>[], returning = "
 
 beforeAll(async () => {
   pg = await freshDatabase();
+  // As on the local stack (`supabase db reset`); the transcript tests switch it off.
+  await applySeed(pg);
   ownerA = await createOwner(pg);
   ownerB = await createOwner(pg);
   hostA = await pairHost(pg, ownerA);
@@ -69,14 +73,15 @@ describe("migrations", () => {
       "20261102000001_source_health.sql",
       "20261103000001_stale_write_guard.sql",
       "20261104000001_fix_set_owner_from_host.sql",
+      "20261105000001_security_hardening.sql",
     ]);
     const [meta] = await as<{ schema_version: number }>(pg, anon, "select schema_version from public.app_meta");
     expect(meta?.schema_version).toBe(3);
   });
 
-  it("publish hosts, sessions and events to Realtime, but never transcript messages", async () => {
+  it("publish only sessions and events to Realtime: no host heartbeats, never transcript messages", async () => {
     const rows = (await pg.query<{ tablename: string }>("select tablename from pg_publication_tables where pubname = 'supabase_realtime' order by 1")).rows;
-    expect(rows.map((r) => r.tablename)).toEqual(["hosts", "session_events", "sessions"]);
+    expect(rows.map((r) => r.tablename)).toEqual(["session_events", "sessions"]);
   });
 
   it("enable RLS on every public table", async () => {
@@ -470,13 +475,162 @@ describe("revocation", () => {
   });
 });
 
+describe("owner identity fails closed (S4)", () => {
+  /** A token as GoTrue would issue it for `sub`, with these server-set app_metadata extras. */
+  const withAppMetadata = (sub: string, extra: Record<string, unknown>): Principal => ({
+    role: "authenticated",
+    claims: { sub, role: "authenticated", aal: "aal1", app_metadata: { provider: "email", providers: ["email"], ...extra }, user_metadata: {} },
+  });
+  const ownerUid = async (who: Principal) => (await as<{ uid: string | null }>(pg, who, "select public.owner_uid() as uid"))[0]?.uid;
+
+  for (const [label, hostId] of [
+    ["not a uuid", "not-a-uuid"],
+    ["36 hyphens (passed the v1 pattern, then failed the cast)", "-".repeat(36)],
+    ["empty", ""],
+    ["missing", undefined],
+    ["a JSON number", 42],
+  ] as const) {
+    it(`a host claim with a malformed host_id (${label}) is neither a host nor an owner`, async () => {
+      // The sub of a real owner: before the fix this token read ownerA's data.
+      const who = withAppMetadata(ownerA.id, { mc_role: "host", ...(hostId === undefined ? {} : { host_id: hostId }) });
+      expect(await ownerUid(who)).toBeNull();
+      expect(await as(pg, who, "select id from public.hosts")).toEqual([]);
+      expect(await as(pg, who, "select id from public.sessions")).toEqual([]);
+      expect(await as(pg, who, "select * from public.notification_prefs")).toEqual([]);
+      expect(await failure(as(pg, who, "select * from public.create_host_pairing('x')"))).toMatchObject({ code: "42501", message: "only owners can pair hosts" });
+      expect(await as(pg, who, "update public.hosts set name = 'pwned' where id = $1 returning id", [hostA.id])).toEqual([]);
+    });
+  }
+
+  it("any mc_role in app_metadata, whatever its value, removes owner rights", async () => {
+    for (const role of ["admin", "owner", "", null]) {
+      expect(await ownerUid(withAppMetadata(ownerA.id, { mc_role: role }))).toBeNull();
+    }
+    // Unchanged: a normal owner token, and user_metadata (user-writable) is ignored.
+    expect(await ownerUid(ownerA.who)).toBe(ownerA.id);
+    const userMeta: Principal = { role: "authenticated", claims: { sub: ownerA.id, role: "authenticated", app_metadata: {}, user_metadata: { mc_role: "host" } } };
+    expect(await ownerUid(userMeta)).toBe(ownerA.id);
+  });
+
+  it("a well-formed host claim still works, in either letter case", async () => {
+    const upper = hostPrincipal(hostA.authUserId, hostA.id.toUpperCase());
+    const visible = ids(await as(pg, upper, "select id from public.sessions order by id"));
+    expect(visible).toContain(sessionA);
+    expect(visible).toEqual(ids(await as(pg, hostA.who, "select id from public.sessions order by id")));
+    expect(await ownerUid(upper)).toBeNull();
+  });
+});
+
+describe("read-only capabilities (S3, D-003)", () => {
+  it("refuses any control capability on insert and update", async () => {
+    for (const cap of ["send_message", "resume", "approve_requests"]) {
+      const e = await failure(insertSession(hostA, { ...sessionRow(), capabilities: ["discover", cap] }));
+      expect(e).toMatchObject({ code: "23514" });
+      expect(await failure(as(pg, hostA.who, "update public.sessions set capabilities = $1 where id = $2", [["discover", cap], sessionA])))
+        .toMatchObject({ code: "23514" });
+    }
+    expect(await failure(insertSession(hostA, { ...sessionRow(), capabilities: ["teleport"] }))).toMatchObject({ code: "23514" });
+  });
+
+  it("accepts every read-only capability", async () => {
+    const id = await insertSession(hostA, { ...sessionRow(), capabilities: ["discover", "get_details", "read_messages", "subscribe_events"] });
+    expect(id).toBeTruthy();
+  });
+});
+
+describe("transcript storage gate (S2, D-004)", () => {
+  const msg = () => ({ host_id: hostA.id, session_id: sessionA, external_uuid: `gate-${randomUUID()}`, role: "assistant", text: "excerpt" });
+  const setEnabled = (on: boolean) => pg.query("update public.app_meta set transcripts_enabled = $1", [on]);
+  const stored = async (uuid: string) => (await as(pg, ownerA.who, "select id from public.session_messages where external_uuid = $1", [uuid])).length;
+
+  it("defaults to off: migrations alone never enable transcript storage", async () => {
+    const { rows } = await pg.query<{ d: string; nullable: string }>(
+      "select column_default as d, is_nullable as nullable from information_schema.columns where table_schema = 'public' and table_name = 'app_meta' and column_name = 'transcripts_enabled'");
+    expect(rows).toEqual([{ d: "false", nullable: "NO" }]);
+    const fresh = await freshDatabase();
+    try {
+      const [m] = (await fresh.query<{ on: boolean }>("select transcripts_enabled as on from public.app_meta")).rows;
+      expect(m?.on).toBe(false);
+    } finally {
+      await fresh.close();
+    }
+  });
+
+  it("is switched on by the local seed", async () => {
+    const [m] = await as<{ transcripts_enabled: boolean }>(pg, anon, "select transcripts_enabled from public.app_meta");
+    expect(m?.transcripts_enabled).toBe(true);
+  });
+
+  it("refuses a host's transcript insert while disabled, and allows it while enabled", async () => {
+    await setEnabled(false);
+    try {
+      const off = msg();
+      const e = await failure(as(pg, hostA.who, ...insertSql("session_messages", [off])));
+      expect(e?.code).toBe("42501");
+      expect(e?.message).toMatch(/row-level security/);
+      expect(await stored(off.external_uuid)).toBe(0);
+    } finally {
+      await setEnabled(true);
+    }
+    const on = msg();
+    expect(await as(pg, hostA.who, ...insertSql("session_messages", [on], "id"))).toHaveLength(1);
+    expect(await stored(on.external_uuid)).toBe(1);
+  });
+
+  it("still refuses another host's session while enabled", async () => {
+    const forged = { ...msg(), session_id: sessionB };
+    expect(await failure(as(pg, hostA.who, ...insertSql("session_messages", [forged])))).toMatchObject({ code: "42501" });
+  });
+
+  it("can't be toggled by an owner, a host or anon through the API", async () => {
+    for (const who of [ownerA.who, hostA.who, anon]) {
+      for (const on of [true, false]) {
+        expect((await failure(as(pg, who, "update public.app_meta set transcripts_enabled = $1", [on])))?.code).toBe("42501");
+      }
+      expect((await failure(as(pg, who, "insert into public.app_meta (id, schema_version, transcripts_enabled) values (true, 3, true)")))?.code).toBe("42501");
+    }
+    const grants = (await pg.query<{ u: boolean; i: boolean }>(
+      "select has_column_privilege('authenticated', 'public.app_meta', 'transcripts_enabled', 'UPDATE') as u, has_table_privilege('authenticated', 'public.app_meta', 'INSERT') as i")).rows;
+    expect(grants).toEqual([{ u: false, i: false }]);
+  });
+
+  it("keeps transcript messages out of Realtime", async () => {
+    const { rows } = await pg.query("select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'session_messages'");
+    expect(rows).toEqual([]);
+  });
+});
+
+// Realtime's own authorization is emulated (harness `realtimeAccess`); the
+// Realtime service, its join flow and its caching are not exercised here.
+describe("Realtime private channel (M5)", () => {
+  const topic = () => `tavro-changes:${randomUUID()}`;
+
+  it("lets a signed-in owner receive on a tavro-changes topic and send nothing", async () => {
+    expect(await realtimeAccess(pg, ownerA.who, topic())).toEqual({ broadcast: true, presence: true, send: false });
+  });
+
+  it("refuses hosts, malformed host claims and anon", async () => {
+    const malformed: Principal = { role: "authenticated", claims: { sub: ownerA.id, role: "authenticated", app_metadata: { mc_role: "host", host_id: "x" } } };
+    for (const who of [hostA.who, malformed, anon]) {
+      expect(await realtimeAccess(pg, who, topic())).toEqual({ broadcast: false, presence: false, send: false });
+    }
+  });
+
+  it("refuses other topics, even for owners", async () => {
+    for (const t of ["realtime:public", "tavro-changes", "other:tavro-changes:x", "mc-changes-abc"]) {
+      expect(await realtimeAccess(pg, ownerA.who, t)).toEqual({ broadcast: false, presence: false, send: false });
+    }
+  });
+});
+
 // Asserted here rather than left implicit: the security-definer helpers must
 // not be callable by anon, and the trigger functions by nobody.
 describe("function privileges", () => {
   it("match the migrations' revoke/grant lists", async () => {
     const can = async (role: string, fn: string) =>
       (await pg.query<{ ok: boolean }>("select has_function_privilege($1, $2, 'EXECUTE') as ok", [role, fn])).rows[0]?.ok;
-    for (const fn of ["public.create_host_pairing(text)", "public.host_heartbeat(text, text, boolean, boolean)", "public.owner_uid()", "public.active_host_id()"]) {
+    // owner_uid and jwt_host_id were replaced in 20261105000001; CREATE OR REPLACE must have kept these.
+    for (const fn of ["public.create_host_pairing(text)", "public.host_heartbeat(text, text, boolean, boolean)", "public.owner_uid()", "public.active_host_id()", "public.jwt_host_id()"]) {
       expect(await can("anon", fn)).toBe(false);
       expect(await can("authenticated", fn)).toBe(true);
     }
@@ -489,5 +643,17 @@ describe("function privileges", () => {
       expect(await can("anon", fn)).toBe(false);
       expect(await can("authenticated", fn)).toBe(false);
     }
+  });
+
+  it("keep the replaced identity helpers' owner and invoker security", async () => {
+    const { rows } = await pg.query<{ proname: string; owner: string; definer: boolean; config: string[] | null }>(
+      `select p.proname, pg_get_userbyid(p.proowner) as owner, p.prosecdef as definer, p.proconfig as config
+         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public' and p.proname in ('owner_uid', 'jwt_host_id', 'active_host_id') order by 1`);
+    expect(rows).toEqual([
+      { proname: "active_host_id", owner: "postgres", definer: true, config: ["search_path=\"\""] },
+      { proname: "jwt_host_id", owner: "postgres", definer: false, config: ["search_path=\"\""] },
+      { proname: "owner_uid", owner: "postgres", definer: false, config: ["search_path=\"\""] },
+    ]);
   });
 });

@@ -14,6 +14,19 @@ export interface SignOutResult {
 export type ChangeTopic ="sessions" | "session_events" | "hosts";
 
 /**
+ * Whether `subscribe`'s server push is working. "unavailable": the channel
+ * couldn't be joined or was lost; the app's 30 s polls still keep data current.
+ */
+export type LiveUpdatesStatus = "connecting" | "on" | "unavailable";
+
+/** Read-only view of the live-updates channel, for display. Carries no error details. */
+export interface LiveUpdates {
+  /** Null while nothing is subscribed. */
+  status(): LiveUpdatesStatus | null;
+  onChange(cb: () => void): () => void;
+}
+
+/**
  * The client-side contract used by the web app and, later, the React Native
  * app. Implementations must enforce nothing security-relevant themselves:
  * authorisation lives in the database (RLS) — this is only a typed wrapper.
@@ -56,6 +69,8 @@ export interface TavroApi {
 
   /** Server-pushed change notifications. Returns an unsubscribe function. */
   subscribe(cb: (topic: ChangeTopic) => void): () => void;
+  /** How the latest subscription is doing. Absent where there is no server push to fail (demo). */
+  readonly liveUpdates?: LiveUpdates;
 }
 
 /**

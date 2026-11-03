@@ -81,6 +81,52 @@ export async function as<T = Record<string, unknown>>(
   });
 }
 
+/** Applies supabase/seed.sql as the superuser, as `supabase db reset` does on the local stack. */
+export async function applySeed(pg: PGlite): Promise<void> {
+  await pg.exec(readFileSync(fileURLToPath(new URL("../seed.sql", import.meta.url)), "utf8"));
+}
+
+/**
+ * Emulates Realtime's private-channel authorization for `who` on `topic`: a
+ * row for each extension is present (as Realtime inserts one in its check
+ * transaction), and the caller may receive if a SELECT with `realtime.topic`
+ * set finds it, and may send if its own INSERT passes RLS. An emulation of
+ * the policy decision only, not of the Realtime service.
+ */
+export async function realtimeAccess(
+  pg: PGlite,
+  who: Principal,
+  topic: string,
+): Promise<{ broadcast: boolean; presence: boolean; send: boolean }> {
+  let result: { broadcast: boolean; presence: boolean; send: boolean } | undefined;
+  const ROLLBACK = new Error("rollback");
+  await pg
+    .transaction(async (tx: Transaction) => {
+      await tx.query("insert into realtime.messages (topic, extension) values ($1, 'broadcast'), ($1, 'presence')", [topic]);
+      const claims = who.role === "authenticated" ? who.claims : { role: who.role };
+      await tx.query(
+        "select set_config('role', $1, true), set_config('request.jwt.claims', $2, true), set_config('realtime.topic', $3, true)",
+        [who.role, JSON.stringify(claims), topic],
+      );
+      const { rows } = await tx.query<{ extension: string }>("select extension from realtime.messages where topic = $1", [topic]);
+      let send = true;
+      await tx.query("savepoint s");
+      try {
+        await tx.query("insert into realtime.messages (topic, extension, event) values ($1, 'broadcast', 'x')", [topic]);
+      } catch {
+        send = false;
+        await tx.query("rollback to savepoint s");
+      }
+      result = { broadcast: rows.some((r) => r.extension === "broadcast"), presence: rows.some((r) => r.extension === "presence"), send };
+      throw ROLLBACK; // leave nothing behind, as Realtime's check does
+    })
+    .catch((e: unknown) => {
+      if (e !== ROLLBACK) throw e;
+    });
+  if (!result) throw new Error("realtime access check did not run");
+  return result;
+}
+
 /** The SQLSTATE and message of a failed call, or null if it succeeded. */
 export async function failure(p: Promise<unknown>): Promise<{ code: string; message: string } | null> {
   try {

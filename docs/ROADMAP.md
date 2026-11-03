@@ -14,19 +14,52 @@ Users can trust Tavro to tell them what their AI coding sessions are doing and w
 The requirements source is `docs/PRODUCT_SPEC.md`. Status for every requirement is in `docs/GAP_ANALYSIS.md`; the gap numbers (G#) below refer to it.
 
 **Next cycle** (G numbers are in GAP_ANALYSIS; session continuity is in `docs/EXECUTION_STATE.md`):
-1. **G13, reliability edges:** present partial data when one query fails, and add a sleep/resume test.
-2. **Full spec re-audit** (the directive of 2026-11-03 §2):
-   - real-connector readiness;
-   - multi-host reliability;
-   - lifecycle correctness;
-   - alert and notification delivery;
-   - mobile usability;
-   - onboarding;
-   - diagnostics;
-   - accessibility.
-3. **Small follow-ups from the 2026-11-03 QA review:**
-   - Two hidden tabs each make their own sound for one burst (LOW-3).
-   - A paused project is shown both by the banner and by the page's own error state before anything loads (LOW-4).
+Local gaps G22–G32 come from the 2026-11-03 spec audit, in priority order:
+1. **G25:** read and dismiss a session's alerts from its page.
+2. **G26:** name states on the Alerts page.
+3. **G23:** keep filters when going back from a session.
+4. **G22:** unknown chips while hosts are missing.
+5. **G31:** axe on the Alerts and Host pages, plus a token contrast test.
+6. **G28:** list cap and malformed rows.
+7. **G27:** diagnostics.
+8. **G29:** setup checklist.
+9. **G30:** remaining mobile items.
+10. **G32:** small review follow-ups. These include exporting `isKeyRejection` from api-client, so the connector's copy can go.
+11. **G24:** transition model.
+
+**Done 2026-11-03 (fifth cycle):**
+- **G13 finished:** partial data (D-023), sleep/resume (D-024), and a host refused sign-in (`auth_failed`).
+- **Claude Code provider hardened**, still disabled (D-025).
+- **Database hardening (D-022):**
+  - transcripts are refused by the database unless enabled locally;
+  - capabilities are read-only;
+  - `owner_uid` fails closed;
+  - Realtime uses a private channel, INSERT/UPDATE only.
+- **Phone-access review fixes in the runbook:**
+  - fabricated keys for the key-rejection check;
+  - MFA required;
+  - CLI token hygiene;
+  - pinned Edge Function;
+  - `test:db` as a hard gate;
+  - hosted smoke test;
+  - auth hardening;
+  - accurate "what leaves the laptop";
+  - CSP generator;
+  - operations and incident runbooks;
+  - `docs/RELEASE.md`.
+- **Mobile fixes:**
+  - iOS zoom on inputs;
+  - sideways scrolling;
+  - scroll-to-top on navigation;
+  - safe areas;
+  - touch targets;
+  - focus not obscured;
+  - honest phone notification copy.
+- **Honesty fixes:**
+  - the headline never says All clear on stale or unconfirmable data;
+  - the pill agrees with the page;
+  - Claude Code capabilities claim only what is implemented.
+- **The QA and security reviews of the integrated tree** found no Critical or High issues. Every Medium and Low finding was fixed, except the ones listed in G32.
 
 **Done 2026-11-03 (fourth cycle):**
 - **G16** notification bursts (D-018).

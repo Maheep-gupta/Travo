@@ -1,1 +1,21 @@
+-- Local stack only: `supabase start` and `supabase db reset` load this file.
+-- `supabase db push`, which the hosted runbook uses, does not (unless asked
+-- with --include-seed, which the runbook must never use). It IS loaded by
+-- `supabase db reset --linked` and by Supabase Branching preview branches,
+-- both forbidden by docs/DEPLOYMENT.md step 3.
+--
+-- Deliberately unguarded: no SQL-visible signal tells this local stack from a
+-- hosted project (both run the same Supabase Postgres image, roles and
+-- extensions; server address and cluster name are deployment details), so a
+-- guard would be an untestable guess that could also switch the local
+-- feature off. The control is the runbook, plus the transcripts_enabled =
+-- false check after every push (DEPLOYMENT.md steps 3 and 9b).
+--
 -- No seed data. Demo sessions come from the connector's mock provider and are flagged is_demo.
+
+-- The loopback transcript feature (D-004): the local database accepts
+-- transcript excerpts from paired hosts. The connector still writes them only
+-- when MC_SYNC_TRANSCRIPTS=true and its backend URL is a loopback address.
+-- Hosted projects keep the migration default (false), so the database itself
+-- refuses transcript inserts there.
+update public.app_meta set transcripts_enabled = true;

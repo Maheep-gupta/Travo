@@ -1,7 +1,23 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createClient, isAuthApiError, type SupabaseClient } from "@supabase/supabase-js";
 import { SessionUpsert, type HeartbeatInput, type ProviderId } from "@mc/contracts";
 import type { EventInput, KnownSession, MessageInput, Transport } from "../types.js";
 import type { HostCredentials } from "../credentials.js";
+import { HostAuthError, TranscriptsRefusedError } from "./errors.js";
+
+/** Auth statuses that mean "this login is refused", not "try again shortly". */
+const REJECTED_SIGN_IN: ReadonlySet<number> = new Set([400, 401, 403]);
+
+/**
+ * The API gateway refusing the `apikey` (rotated, revoked or mistyped
+ * publishable key), not the host's login: a 401 whose message or hint names
+ * an API key. The same rule as isKeyRejection in packages/api-client. Only
+ * matched, never logged.
+ */
+function isKeyRejection(status: number | undefined, message: string | undefined, hint?: string | null): boolean {
+  return status === 401 && /\bapi key\b/i.test(`${message ?? ""} ${hint ?? ""}`);
+}
+
+const KEY_REJECTED = "the project rejected the publishable key (401)";
 
 /**
  * Writes to the user's Supabase project as the paired host user. Uses only
@@ -18,10 +34,13 @@ export class SupabaseTransport implements Transport {
     url: string,
     publishableKey: string,
     private readonly creds: HostCredentials,
+    /** For tests: replaces the network. */
+    fetchImpl?: typeof fetch,
   ) {
     this.backendUrl = url;
     this.client = createClient(url, publishableKey, {
       auth: { persistSession: false, autoRefreshToken: true },
+      ...(fetchImpl ? { global: { fetch: fetchImpl } } : {}),
     });
   }
 
@@ -31,19 +50,41 @@ export class SupabaseTransport implements Transport {
       if (data.session) return;
     }
     const { error } = await this.client.auth.signInWithPassword({ email: this.creds.email, password: this.creds.password });
-    if (error) throw new Error(`host sign-in failed (${error.status ?? "network"}); the host may have been revoked`);
+    if (error) {
+      this.signedIn = false;
+      // Auth answered and refused the login (wrong or deleted credentials, banned
+      // user). Network failures, rate limits and 5xx are retryable and stay "offline".
+      if (isAuthApiError(error) && isKeyRejection(error.status, error.message)) {
+        throw new HostAuthError(KEY_REJECTED, "check_publishable_key");
+      }
+      if (isAuthApiError(error) && REJECTED_SIGN_IN.has(error.status)) {
+        const code = typeof error.code === "string" && /^[a-z_]{1,40}$/.test(error.code) ? error.code : String(error.status);
+        throw new HostAuthError(`host sign-in rejected (${code})`);
+      }
+      throw new Error(`host sign-in failed (${error.status || "network"})`);
+    }
     this.signedIn = true;
   }
 
   async heartbeat(input: HeartbeatInput): Promise<void> {
     await this.ensureSignedIn();
-    const { error } = await this.client.rpc("host_heartbeat", {
+    const { error, status } = await this.client.rpc("host_heartbeat", {
       p_platform: input.platform,
       p_connector_version: input.connector_version,
       p_remote_control_allowed: input.remote_control_allowed,
       p_provider_ok: input.provider_ok,
     });
-    if (error) throw new Error(`heartbeat failed (${error.code})`);
+    if (error) {
+      // A key rotated while this connector was signed in.
+      if (isKeyRejection(status, error.message, error.hint)) throw new HostAuthError(KEY_REJECTED, "check_publishable_key");
+      // host_heartbeat raises 42501 when the caller is not an active host: a
+      // revoked host keeps a working login, so this is where revocation shows.
+      if (error.code === "42501") {
+        this.signedIn = false;
+        throw new HostAuthError("this host is no longer active (42501)");
+      }
+      throw new Error(`heartbeat failed (${error.code})`);
+    }
   }
 
   async loadKnownSessions(provider: ProviderId): Promise<Map<string, KnownSession>> {
@@ -85,6 +126,17 @@ export class SupabaseTransport implements Transport {
     const { error } = await this.client
       .from("session_messages")
       .upsert(messages.map((m) => ({ ...m, host_id: this.creds.host_id })), { onConflict: "session_id,external_uuid", ignoreDuplicates: true });
-    if (error) throw new Error(`insert messages failed (${error.code})`);
+    if (!error) return;
+    // 42501 is also the owner trigger ("session does not belong to host") and
+    // a revoked host's RLS, so only a confirmed setting counts as one.
+    if (error.code === "42501" && (await this.transcriptsDisabled())) throw new TranscriptsRefusedError();
+    throw new Error(`insert messages failed (${error.code})`);
+  }
+
+  /** True only when app_meta says transcript storage is off; false when it's on or can't be read. */
+  private async transcriptsDisabled(): Promise<boolean> {
+    const { data, error } = await this.client.from("app_meta").select("transcripts_enabled").limit(1);
+    if (error || !Array.isArray(data) || data.length !== 1) return false;
+    return (data[0] as { transcripts_enabled?: unknown }).transcripts_enabled === false;
   }
 }

@@ -5,7 +5,7 @@
 // Refetching on reconnect is TanStack Query's own (onlineManager resumes paused
 // queries and refetchOnReconnect refreshes stale ones), so it isn't repeated here.
 import { connectionMessage, formatDataTime } from "./connectivity.js";
-import { useConnection, useNow } from "./hooks.js";
+import { useConnection, useStatusClock } from "./hooks.js";
 import { IconAlert } from "./icons.js";
 
 /**
@@ -14,8 +14,8 @@ import { IconAlert } from "./icons.js";
  * present so screen readers notice when text appears in it.
  */
 export function OfflineBanner() {
-  // Re-evaluated every 5 s so crossing the stale threshold shows up promptly.
-  const now = useNow(5_000);
+  // The shared status clock (every 5 s), so the banner and the top bar's indicator change together.
+  const now = useStatusClock();
   const state = useConnection(now);
   const message = connectionMessage(state, (at) => formatDataTime(at, now.getTime()));
 

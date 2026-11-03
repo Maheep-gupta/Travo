@@ -35,6 +35,8 @@ The aim is to avoid one shared database run by the application developer.
    - integration type
    - a *hashed or aliased* project path
    - **no** transcript content
+
+   **Not yet met (2026-11-03):** the committed connector sends the CLI's session `name` verbatim as the title, and the raw last folder name of the working directory as the project label, not a hash or alias. The provider is being reworked. See `DEPLOYMENT.md` → *What leaves the laptop* for exactly what is sent.
 2. Remote commands are disabled when the host's Claude policy disallows Remote Control. The connector should read `policy-limits.json`, which is policy data rather than a credential, and refuse remote commands when that flag is false.
 3. Privileged keys never reach the web or mobile client. This covers the secret key, the `service_role` key, the database password, and Management API tokens.
 4. No silent provisioning and no schema changes without explicit user approval.
@@ -169,7 +171,7 @@ Every user runs their own copy of the schema at their own pace, so versioning is
 | Secret key leaked through a misconfigured client build | Clients take only URL plus publishable key. Supabase also rejects secret-key requests from browsers. |
 | Cached Realtime grants survive a host or device revocation | Short JWT expiry (for example 10–15 minutes). Revocation disables the auth user, so the next refresh fails. |
 | Commands replayed or duplicated | Unique idempotency key, an expiry time on commands, and the connector refuses expired or already-processed commands. |
-| Metadata leaking sensitive project names or paths | Upload only aliased project names by default. Full paths are opt-in. |
+| Metadata leaking sensitive project names or paths | Upload only aliased project names by default. Full paths are opt-in. **Not implemented yet:** full paths are never sent, but the last folder name is sent as is (`DEPLOYMENT.md` → *What leaves the laptop*). |
 | Free project paused after about 7 days of low activity (for example, laptop off over a holiday) | The app detects that the project is unreachable and shows "project paused – unpause in Supabase dashboard". **[Unverified]** whether connector heartbeats count as enough activity. The docs say "a few user requests to the database each day" is typically enough. |
 | No backups on the free tier | Document export before migrations. Recommend Pro for anyone who cares about history. |
 | Company policy: Remote Control disabled by the org | BYOS **does not change this**. Uploading even metadata to a personal cloud project should be cleared with IT or the Claude admin first. Remote commands stay disabled while the policy flag is false. |

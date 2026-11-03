@@ -81,8 +81,8 @@ export function SystemNotificationsCard() {
 
       {state === "unsupported" && (
         <Notice>
-          This browser doesn't offer notifications to web pages here. On iPhone and iPad they only work after adding Tavro to the Home Screen. In-app
-          alerts still work.
+          This browser doesn't offer notifications to web pages here. On iPhone and iPad, Tavro can't show system notifications yet: they need a
+          background service Tavro doesn't have. In-app alerts still work.
         </Notice>
       )}
 
@@ -98,7 +98,10 @@ export function SystemNotificationsCard() {
           <button type="button" className="btn primary" onClick={() => void turnOn()} disabled={requesting}>
             {requesting ? "Waiting for your browser…" : "Turn on system notifications"}
           </button>
-          <span className="muted">Your browser will ask for permission.</span>
+          <span className="muted">
+            Your browser will ask for permission. On phones, browsers usually only show these through a background service, which Tavro doesn't have
+            yet, so they may not appear even when allowed.
+          </span>
         </div>
       )}
 

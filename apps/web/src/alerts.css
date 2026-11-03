@@ -38,6 +38,8 @@
 
 @media (max-width: 480px) {
   .alert-actions .btn { display: none; } /* Opening an alert marks it read; keep rows compact on phones. */
+  /* A folded group has no single link to open, so its "Mark n read" stays. */
+  .alert-group > .alert-actions .btn { display: inline-flex; }
 }
 
 /* A folded burst (groupAlerts): one row with a toggle; its alerts open beneath it. */

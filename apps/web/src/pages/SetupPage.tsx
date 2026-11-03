@@ -7,9 +7,18 @@ import { BrandMark } from "../icons.js";
 const FIELDS = ["url", "publishableKey"] as const;
 type Field = (typeof FIELDS)[number];
 
+/**
+ * The URL field's starting value. Dev builds suggest the local Supabase stack;
+ * a production build starts empty, so a deployed app never suggests its
+ * visitor's own loopback address as the backend (release review S9).
+ */
+export function defaultProjectUrl(dev: boolean = import.meta.env.DEV): string {
+  return dev ? "http://127.0.0.1:54321" : "";
+}
+
 export function SetupPage() {
   const { setChoice } = useApiContext();
-  const [url, setUrl] = useState("http://127.0.0.1:54321");
+  const [url, setUrl] = useState(defaultProjectUrl);
   const [key, setKey] = useState("");
   const [errors, setErrors] = useState<FieldErrors<Field>>({});
   const inputs = { url: useRef<HTMLInputElement>(null), publishableKey: useRef<HTMLInputElement>(null) };
@@ -99,7 +108,10 @@ export function SetupPage() {
               onChange={(e) => setUrl(e.target.value)}
               inputMode="url"
               autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
               spellCheck={false}
+              placeholder="https://<project-ref>.supabase.co"
               aria-invalid={errors.url ? true : undefined}
               aria-describedby={describedBy("url")}
             />
@@ -118,7 +130,10 @@ export function SetupPage() {
               value={key}
               onChange={(e) => setKey(e.target.value)}
               autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
               spellCheck={false}
+              enterKeyHint="go"
               placeholder="sb_publishable_…"
               aria-invalid={errors.publishableKey ? true : undefined}
               aria-describedby={describedBy("publishableKey", "key-hint")}

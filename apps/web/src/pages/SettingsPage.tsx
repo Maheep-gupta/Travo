@@ -29,8 +29,8 @@ const LABELS: Record<keyof NotificationPrefs, { title: string; hint: string }> =
   on_waiting_for_input: { title: "Waiting for you", hint: "Claude finished its turn" },
   on_failed: { title: "Failed", hint: "The session reported an error" },
   on_completed: { title: "Completed", hint: "The session reported it is done" },
-  on_host_disconnected: { title: "Host disconnected", hint: "A laptop stopped reporting" },
-  on_host_reconnected: { title: "Host reconnected", hint: "A laptop is reporting again" },
+  on_host_disconnected: { title: "Host disconnected", hint: "A laptop stopped reporting, or can't read its sessions" },
+  on_host_reconnected: { title: "Host reconnected", hint: "A laptop is reporting again, or can read its sessions again" },
 };
 
 export function SettingsPage() {
@@ -172,6 +172,9 @@ export function AppearanceCard() {
       if (e.key === THEME_STORAGE_KEY || e.key === null) setPref(parseThemePreference(e.newValue));
     };
     window.addEventListener("storage", onStorage);
+    // A change that landed between the first render and this listener (effects
+    // run after paint) would otherwise be missed until the next one.
+    setPref(loadThemePreference(webStorage));
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 

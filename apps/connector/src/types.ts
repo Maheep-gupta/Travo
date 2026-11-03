@@ -19,6 +19,20 @@ export interface ProviderMessage {
   occurred_at: string | null;
 }
 
+/**
+ * Why a provider read failed, so diagnostics can say which. Content-free.
+ * Every category means the same thing to the backend (provider_ok = false);
+ * the distinction is for logs and the connector's own diagnostics.
+ */
+export type ProviderFailureCategory =
+  | "cli_missing"
+  | "auth_required"
+  | "timeout"
+  | "invalid_output"
+  | "incompatible_version"
+  | "interrupted"
+  | "failed";
+
 export interface Provider {
   readonly id: ProviderId;
   readonly isDemo: boolean;

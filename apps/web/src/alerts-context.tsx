@@ -141,6 +141,8 @@ function AlertWatcher({ store, userId }: { store: AlertStore; userId: string }) 
       snapshot.current,
       sessions.data,
       hosts.data.map((h) => ({ id: h.id, connectivity: hostConnectivity(h, observedAt), last_seen_at: h.last_seen_at, provider_error_since: h.provider_error_since, is_demo: isDemo })),
+      // Lets detection notice this tab's own gaps (sleep, frozen tab), so a host that slept with it isn't alerted.
+      observedAt,
     );
     snapshot.current = result.snapshot;
     // null = never saved, so the defaults genuinely apply.

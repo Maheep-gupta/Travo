@@ -58,10 +58,14 @@ export interface MappedStatus {
   reason: string;
 }
 
+/** status_reason for any provider status the mapping doesn't recognise. */
+export const UNRECOGNISED_STATUS_REASON = "Unrecognised status from the provider.";
+
 /**
  * Maps the `status` field of `claude agents --json` to our states.
  * Only values we have observed are mapped; anything else is reported as
- * unknown together with the raw value rather than guessed.
+ * unknown rather than guessed. That reason is fixed text: it syncs to the
+ * cloud, and an unrecognised raw value could carry anything.
  */
 export function mapClaudeAgentsStatus(raw: unknown): MappedStatus {
   switch (raw) {
@@ -73,9 +77,6 @@ export function mapClaudeAgentsStatus(raw: unknown): MappedStatus {
         reason: "Claude Code reports the session as idle at its prompt (turn finished or awaiting your next message).",
       };
     default:
-      return {
-        status: "unknown",
-        reason: `Claude Code reported an unrecognised status (${typeof raw === "string" ? raw.slice(0, 40) : typeof raw}).`,
-      };
+      return { status: "unknown", reason: UNRECOGNISED_STATUS_REASON };
   }
 }

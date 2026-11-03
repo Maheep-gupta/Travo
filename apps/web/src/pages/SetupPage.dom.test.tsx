@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAxe } from "vitest-axe";
 import { createDemoApi } from "@mc/api-client/demo";
 import { ApiProvider, useApiContext } from "../api-context.js";
-import { SetupPage } from "./SetupPage.js";
+import { SetupPage, defaultProjectUrl } from "./SetupPage.js";
 
 // First run: nothing chosen yet. Demo opens the real demo backend; a Supabase
 // project is never contacted from tests.
@@ -33,7 +33,10 @@ let queryClient: QueryClient;
 beforeEach(() => {
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 });
-afterEach(() => queryClient.clear());
+afterEach(() => {
+  queryClient.clear();
+  vi.unstubAllEnvs();
+});
 
 /** Shows what the setup page asked the app to do. */
 function ChoiceProbe() {
@@ -178,6 +181,36 @@ describe("SetupPage", () => {
     connect();
     expect(screen.getByRole("textbox", { name: "Project URL" })).toBe(urlInput());
     expect(screen.getByRole("textbox", { name: "Publishable key" })).toBe(keyInput());
+  });
+
+  // Release review S9: a deployed build must not suggest the visitor's own loopback address.
+  it("suggests the local stack only in dev builds", () => {
+    expect(defaultProjectUrl(true)).toBe("http://127.0.0.1:54321");
+    expect(defaultProjectUrl(false)).toBe("");
+  });
+
+  it("starts with an empty project URL in a production build and requires one", () => {
+    vi.stubEnv("DEV", false);
+    renderSetup();
+    expect(urlInput().value).toBe("");
+    expect(urlInput().placeholder).toBe("https://<project-ref>.supabase.co");
+    fireEvent.change(keyInput(), { target: { value: PUBLISHABLE } });
+    connect();
+    expect(urlInput().getAttribute("aria-invalid")).toBe("true");
+    expect(document.activeElement).toBe(urlInput());
+    expect(choice()).toBe("none/none");
+    expect(window.localStorage.getItem(BACKEND_KEY)).toBeNull();
+  });
+
+  // Mobile review M5: iOS capitalised and autocorrected pasted keys ("Sb_publishable…").
+  it("turns off auto-capitalisation and autocorrect on both fields", () => {
+    renderSetup();
+    for (const input of [urlInput(), keyInput()]) {
+      expect(input.getAttribute("autocapitalize")).toBe("none");
+      expect(input.getAttribute("autocorrect")).toBe("off");
+      expect(input.getAttribute("spellcheck")).toBe("false");
+    }
+    expect(keyInput().getAttribute("enterkeyhint")).toBe("go");
   });
 
   it("has no axe violations, before and after a rejected submit", async () => {

@@ -6,6 +6,7 @@ import {
   MAX_FETCH_RETRIES,
   RETRY_DELAY_CAP_MS,
   STALE_DATA_AFTER_MS,
+  connectionIndicator,
   connectionMessage,
   connectionState,
   fetchFailureOf,
@@ -212,5 +213,24 @@ describe("formatDataTime", () => {
   it("shows the time for today and adds the date for another day", () => {
     expect(formatDataTime(Date.UTC(2026, 10, 2, 14, 5), NOW, "en-GB", "UTC")).toBe("14:05");
     expect(formatDataTime(Date.UTC(2026, 10, 1, 9, 7), NOW, "en-GB", "UTC")).toBe("1 Nov, 09:07");
+  });
+});
+
+describe("connectionIndicator", () => {
+  it("says Connected only while the data is current, and agrees with the banner otherwise", () => {
+    expect(connectionIndicator({ kind: "current" })).toEqual({ tone: "ok", text: "Supabase", label: "Connected to your Supabase project" });
+    const others = [
+      { kind: "offline", dataFrom: 1 },
+      { kind: "unreachable", dataFrom: 1, cause: "unavailable" },
+      { kind: "unreachable", dataFrom: 1, cause: "paused" },
+      { kind: "unreachable", dataFrom: 1, cause: "error" },
+      { kind: "stale", dataFrom: 1 },
+    ] as const;
+    for (const s of others) {
+      const pill = connectionIndicator(s);
+      expect(pill.tone).not.toBe("ok");
+      expect(`${pill.text} ${pill.label}`).not.toMatch(/connected/i);
+    }
+    expect(connectionIndicator({ kind: "unreachable", dataFrom: null, cause: "paused" }).text).toBe("Paused");
   });
 });

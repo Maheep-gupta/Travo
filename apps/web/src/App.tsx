@@ -2,17 +2,18 @@ import { Suspense, useCallback, useEffect, useRef, useState, type ReactNode } fr
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, NavLink, Navigate, Route, Routes, useLocation } from "react-router";
 import { ApiError, type AuthUser, type SignOutResult } from "@mc/api-client/demo";
-import { checkSchemaCompat, unreadCount } from "@mc/domain";
+import { checkSchemaCompat, statusIndicator, unreadCount } from "@mc/domain";
 import { AlertsProvider, useAlerts } from "./alerts-context.js";
 import "./alerts.css";
 import "./shell.css";
 import { useApi, useApiContext, useLiveUpdates } from "./api-context.js";
 import { ErrorState, Notice, Spinner } from "./components.js";
-import { SignOutReportContext, clearUserData } from "./hooks.js";
+import { SignOutReportContext, clearUserData, useStatusSync } from "./hooks.js";
 import { BrandMark, IconBell, IconHost, IconSessions, IconSettings } from "./icons.js";
 import { forgetUserLocalData, noteSignedInUser } from "./local-data.js";
 import { OfflineBanner } from "./offline-banner.js";
 import { PageErrorBoundary, retryableLazy } from "./page-loading.js";
+import { useRouteFocus } from "./route-focus.js";
 import { webStorage } from "./platform.js";
 import { closeSystemNotifications } from "./system-notifications.js";
 import { BASE_TITLE, titleWithUnread, updateAppBadge } from "./unread-indicator.js";
@@ -289,6 +290,22 @@ const NAV = [
   { to: "/settings", label: "Settings", icon: <IconSettings />, match: (p: string) => p.startsWith("/settings") },
 ];
 
+/**
+ * The backend indicator. It follows the same rule as the pages (useStatusSync)
+ * and ticks with the offline banner's clock, so it never says "Connected" while
+ * the banner or a page says data couldn't be refreshed or loaded.
+ */
+export function LivePill() {
+  const { connection, sessions, hosts } = useStatusSync();
+  const pill = statusIndicator(connection, [sessions, hosts]);
+  return (
+    <Link to="/settings" className={`env-pill live ${pill.tone}`} aria-label={`${pill.label}. Open settings`}>
+      <span className="dot" aria-hidden="true" />
+      {pill.text}
+    </Link>
+  );
+}
+
 function Shell() {
   const api = useApi();
   const { pathname } = useLocation();
@@ -308,10 +325,7 @@ function Shell() {
     [],
   );
 
-  // Move focus to the page on route change so keyboard and screen-reader users start at the new content.
-  useEffect(() => {
-    document.getElementById("main")?.focus({ preventScroll: true });
-  }, [pathname]);
+  useRouteFocus();
 
   const navLink = (n: (typeof NAV)[number], withIcon: boolean) => {
     const active = n.match(pathname);
@@ -356,10 +370,7 @@ function Shell() {
                 Demo data
               </Link>
             ) : (
-              <Link to="/settings" className="env-pill live" aria-label="Connected to your Supabase project. Open settings">
-                <span className="dot" aria-hidden="true" />
-                Supabase
-              </Link>
+              <LivePill />
             )}
           </div>
         </div>

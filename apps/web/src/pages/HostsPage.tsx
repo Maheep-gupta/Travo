@@ -5,6 +5,8 @@ import type { HostRow, PairingTicket } from "@mc/contracts";
 import {
   buildHostView,
   hostSourceOk,
+  pageAvailability,
+  syncWithRefreshes,
   pairingPollInterval,
   pairingStatus,
   relativeTime,
@@ -13,7 +15,7 @@ import {
   type PairingStatus,
 } from "@mc/domain";
 import { useApi } from "../api-context.js";
-import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, Notice, PageHeader, SessionListSkeleton } from "../components.js";
+import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, MissingDataNotice, Notice, RefreshFailedNotice, PageHeader, SessionListSkeleton } from "../components.js";
 import { useConnection, useHosts, useNow, useSessionViews, userKey, useUserId } from "../hooks.js";
 import { IconAlert, IconCheck, IconClock, IconCopy, IconHost } from "../icons.js";
 import { FreshnessNote } from "./DashboardPage.js";
@@ -23,9 +25,12 @@ export function HostsPage() {
   const now = useNow();
   const hosts = useHosts();
   const sessions = useSessionViews();
-  const sync = useConnection(now).kind;
+  // A failed refresh of the host list makes its cards stale at once, judged as of their last fetch.
+  const sync = syncWithRefreshes(useConnection(now).kind, [sessions.hosts]);
   const hostView = (h: HostRow) => buildHostView(h, now, { sync, fetchedAt: hosts.dataUpdatedAt });
   const summaries = useMemo(() => (sessions.data ? summariseByHost(sessions.data) : null), [sessions.data]);
+  // Hosts are the subject; session counts are extra and say so on each card when they can't load.
+  const availability = pageAvailability({ main: sessions.hosts });
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [ticket, setTicket] = useState<PairingTicket | null>(null);
@@ -74,12 +79,18 @@ export function HostsPage() {
         Laptops running the Tavro connector. It only connects outward and can only report its own sessions.
       </PageHeader>
 
-      {hosts.isLoading ? (
+      {availability.kind === "loading" ? (
         <SessionListSkeleton count={2} label="Loading hosts…" />
-      ) : hosts.error ? (
-        <ErrorState error={hosts.error} onRetry={() => void hosts.refetch()} />
-      ) : hosts.data?.length ? (
+      ) : availability.kind !== "shown" || !hosts.data ? (
+        <ErrorState error={hosts.error ?? new Error()} onRetry={() => void hosts.refetch()} />
+      ) : hosts.data.length ? (
         <section aria-labelledby="h-hosts">
+          <RefreshFailedNotice failure={sessions.refresh} now={now} onRetry={sessions.refetch} />
+          {sessions.sessions === "failed" && (
+            <MissingDataNotice title="Sessions couldn't be loaded." error={sessions.sessionsError} onRetry={sessions.refetchSessions}>
+              <p>Each host's session count appears once the session list loads.</p>
+            </MissingDataNotice>
+          )}
           <div className="section-head">
             <h2 id="h-hosts">Paired hosts</h2>
             <span className="count">
@@ -117,7 +128,7 @@ export function HostsPage() {
                     </div>
                     <div>
                       <dt>Sessions</dt>
-                      <dd>{sessionSummary(summaries, sessions.isLoading, h.id, now)}</dd>
+                      <dd>{sessionSummary(summaries, sessions.sessions === "loading", h.id, now)}</dd>
                     </div>
                     <div>
                       <dt>Platform</dt>

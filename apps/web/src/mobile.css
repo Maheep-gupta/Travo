@@ -1,0 +1,69 @@
+/*
+ * Phone fixes from the 2026-11-03 mobile review. Loaded after styles.css (main.tsx),
+ * so these win without editing the base rules. Code review only: device checks
+ * are pending (docs/QUALITY.md).
+ */
+
+/* iOS Safari zooms into any field under 16px. */
+@media (pointer: coarse) {
+  .input, .select, .input.mono { font-size: 16px; }
+}
+
+/* iOS restyles search fields with its own rounding and inner shadow. */
+.input { -webkit-appearance: none; appearance: none; }
+
+/* Long labels wrap instead of pushing the page sideways; one-line buttons look the same. */
+.btn { white-space: normal; max-width: 100%; text-align: center; line-height: 1.2; padding-block: 6px; }
+
+/* Landscape phones: keep content out of the notch and Dynamic Island. */
+.topbar-inner, .page, .auth {
+  padding-left: max(var(--sp-4), env(safe-area-inset-left));
+  padding-right: max(var(--sp-4), env(safe-area-inset-right));
+}
+@media (min-width: 720px) {
+  .page {
+    padding-left: max(var(--sp-5), env(safe-area-inset-left));
+    padding-right: max(var(--sp-5), env(safe-area-inset-right));
+  }
+}
+.tabbar { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+
+/* Older browsers without dynamic viewport units. */
+.auth { min-height: 100vh; min-height: 100dvh; }
+
+/* Long unbroken names, searches and error text must not force sideways scrolling. */
+.section-head h2, .active-filter > span, .alert-meta { min-width: 0; overflow-wrap: anywhere; }
+.state p { overflow-wrap: anywhere; }
+.notice > div { min-width: 0; overflow-wrap: anywhere; }
+.section-head { flex-wrap: wrap; }
+
+/* Focused controls never end up under the sticky top bar or the fixed tab bar (WCAG 2.4.11). */
+html {
+  scroll-padding-top: calc(var(--topbar-h) + env(safe-area-inset-top) + var(--sp-2));
+  scroll-padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + var(--sp-2));
+}
+@media (min-width: 720px) {
+  html { scroll-padding-bottom: var(--sp-2); }
+}
+
+/* Standalone links that are the only way somewhere get a full touch target. */
+.host-card .head h3 a { display: inline-flex; align-items: center; min-height: 44px; }
+@media (pointer: coarse) {
+  .card-title > a, .host-dashboard-link a { display: inline-flex; align-items: center; min-height: 44px; }
+}
+
+/* The active tab is not shown by colour alone. */
+.tabbar a.active { font-weight: 700; }
+
+/* State chips scroll in their own strip on phones, so the first session card is nearer the top. */
+@media (max-width: 559px) {
+  .state-chips {
+    flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+    margin-inline: calc(-1 * var(--sp-4)); padding-inline: var(--sp-4);
+  }
+  .state-chips > * { flex: none; }
+}
+
+/* Backend indicator states (connectionIndicator); colour plus text, never colour alone. */
+.env-pill.live.warn { color: var(--st-approval); }
+.env-pill.live.down { color: var(--st-failed); }

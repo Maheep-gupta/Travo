@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { OBSERVED_AT_MAX_SKEW_MS, type HeartbeatInput, type ProviderId, type SessionUpsert } from "@mc/contracts";
 import type { EventInput, KnownSession, MessageInput, Transport } from "../types.js";
+import { TranscriptsRefusedError } from "./errors.js";
 
 export class TransportUnavailableError extends Error {
   constructor(message = "backend unreachable (simulated)") {
@@ -20,6 +21,8 @@ export class MemoryTransport implements Transport {
   readonly sessions = new Map<string, SessionUpsert & { id: string }>();
   readonly events: (EventInput & { id: number })[] = [];
   readonly messages: MessageInput[] = [];
+  /** Plays `app_meta.transcripts_enabled`: false makes message inserts fail like RLS does. */
+  transcriptsEnabled = true;
   private eventId = 0;
 
   constructor(
@@ -76,6 +79,7 @@ export class MemoryTransport implements Transport {
 
   async insertMessages(messages: MessageInput[]): Promise<void> {
     this.check();
+    if (!this.transcriptsEnabled && messages.length) throw new TranscriptsRefusedError();
     for (const m of messages) {
       if (this.messages.some((x) => x.session_id === m.session_id && x.external_uuid === m.external_uuid)) continue;
       this.messages.push(m);

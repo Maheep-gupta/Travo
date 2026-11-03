@@ -672,3 +672,10 @@ a.env-pill:hover { background: var(--surface-2); }
 @media (forced-colors: active) {
   .stale-tag { border-color: CanvasText; }
 }
+
+/* Partial data (spec 3.5): one source failed, the rest of the page stays. */
+.missing-data { margin-bottom: var(--sp-4); }
+.missing-data .notice p + p { margin-top: var(--sp-1); }
+.host-summary { margin: var(--sp-3) 0 0; color: var(--text-2); }
+.counts-as-of { display: flex; align-items: center; gap: var(--sp-2); margin: 0 0 var(--sp-2); font-size: 0.85rem; color: var(--text-2); }
+.counts-as-of svg { width: 14px; height: 14px; flex: none; }

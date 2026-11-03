@@ -1,0 +1,15 @@
+[
+  {
+    "pid": 41009,
+    "cwd": "/home/dev/projects/theta",
+    "session_id": "00000000-0000-4000-8000-000000000009",
+    "title": "SYNTHETIC-SECRET-MARKER",
+    "state": "busy"
+  },
+  {
+    "pid": 41010,
+    "cwd": "/home/dev/projects/iota",
+    "session_id": "00000000-0000-4000-8000-000000000010",
+    "state": "idle"
+  }
+]

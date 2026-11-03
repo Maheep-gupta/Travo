@@ -18,6 +18,8 @@ import { relativeTime } from "./time.js";
  * silently dropped realtime channel): withClientRead caps the result at the
  * client's last successful fetch and gives it a client-side reason, so a
  * cached state is never shown as current and a healthy host isn't blamed.
+ * "hosts_unavailable" is client-side as well: the session list loaded but the
+ * host list didn't, so nothing is known about the host (spec 3.5 partial data).
  */
 export type FreshnessReason =
   | "current"
@@ -26,6 +28,7 @@ export type FreshnessReason =
   | "revoked"
   | "never_connected"
   | "host_unknown"
+  | "hosts_unavailable"
   | "client_offline"
   | "client_unreachable"
   | "client_not_refreshed";
@@ -48,6 +51,7 @@ export const STALE_REASON_LABEL: Record<Exclude<FreshnessReason, "current">, str
   revoked: "Host revoked",
   never_connected: "Never connected",
   host_unknown: "Host not listed",
+  hosts_unavailable: "Host status couldn't be loaded",
   client_offline: "Not refreshed — you're offline",
   client_unreachable: "Not refreshed — can't reach the backend",
   client_not_refreshed: "Not refreshed recently",

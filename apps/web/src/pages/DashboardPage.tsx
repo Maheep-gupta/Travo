@@ -11,15 +11,21 @@ import {
   STATUS_GROUPS,
   STATUS_LABEL,
   applyDashboardFilter,
+  buildHostView,
   countByState,
+  countsAsOf,
+  dashboardHeadline,
+  formatDataTime,
   freshnessLabel,
   isFiltering,
   isSessionSort,
   needsAttention,
   normalizeSearchQuery,
+  pageAvailability,
   parseDashboardFilter,
   projectOptions,
   relativeTime,
+  trustedHostCount,
   unreadBySession,
   unreadCount,
   type DashboardFilter,
@@ -30,25 +36,33 @@ import {
 } from "@mc/domain";
 import { useAlerts } from "../alerts-context.js";
 import { useApi } from "../api-context.js";
-import { DemoTag, EmptyState, ErrorState, PageHeader, SessionListSkeleton, StatusBadge } from "../components.js";
-import { useHosts, useNow, useSessionViews } from "../hooks.js";
+import { DemoTag, EmptyState, ErrorState, MissingDataNotice, PageHeader, RefreshFailedNotice, SessionListSkeleton, StatusBadge } from "../components.js";
+import { useConnection, useHosts, useNow, useSessionViews } from "../hooks.js";
 import { IconBell, IconClock, IconClose, IconFolder, IconHost, IconSearch, IconSessions } from "../icons.js";
 import { dashboardFilterParams, noMatchMessage, unreadAlertsLabel } from "../view-model.js";
 
 const SORT_ORDER = Object.keys(SESSION_SORTS) as SessionSort[];
 
+const HOST_NOT_LOADED_OPTION = "Host (not loaded)";
+
 const plural = (n: number) => `${n} ${n === 1 ? "session" : "sessions"}`;
 
 export function DashboardPage() {
   const api = useApi();
-  const { data, isLoading, error, refetch } = useSessionViews();
+  const views = useSessionViews();
+  const { data } = views;
   const hosts = useHosts();
   const now = useNow();
+  // Sessions are the subject; hosts decide whether their statuses can be trusted, and still show if sessions fail.
+  const availability = pageAvailability({ main: views.sessions, context: views.hosts, fallback: views.hosts });
   const [params, setParams] = useSearchParams();
   const parsed = parseDashboardFilter(params);
-  // A well-formed host id that isn't one of ours is ignored like any other invalid value.
-  const hostKnown = parsed.host !== null && (hosts.data ?? []).some((h) => h.id === parsed.host);
-  const filter: DashboardFilter = hostKnown ? parsed : { ...parsed, host: null };
+  // A well-formed host id that isn't one of ours is ignored like any other invalid value. Until the
+  // host list is in, it can't be checked: it is kept (it still filters sessions by host id), so the
+  // next filter change doesn't erase it from the URL.
+  const hostsReady = hosts.data !== undefined;
+  const hostKept = parsed.host !== null && (!hostsReady || hosts.data.some((h) => h.id === parsed.host));
+  const filter: DashboardFilter = hostKept ? parsed : { ...parsed, host: null };
   const { group, state, host, project, provider, query, sort } = filter;
   const alerts = useAlerts();
   const unread = unreadCount(alerts);
@@ -86,6 +100,11 @@ export function DashboardPage() {
   };
 
   const counts = useMemo(() => countByState(data ?? []), [data]);
+  const connection = useConnection(now);
+  const hostClient = { sync: views.sync, fetchedAt: hosts.dataUpdatedAt };
+  const onlineHosts = hosts.data ? hosts.data.filter((h) => buildHostView(h, now, hostClient).connectivity === "online").length : null;
+  const title = dashboardHeadline({ counts: data ? counts : null, sync: views.sync, trustedHosts: trustedHostCount(hosts.data ?? null, now, hostClient) });
+  const asOf = countsAsOf(connection, views.refresh);
   const providersPresent = useMemo(() => [...new Set((data ?? []).map((s) => s.provider))], [data]);
   const projects = useMemo(() => projectOptions(data ?? []), [data]);
   const hostOptions = useMemo(
@@ -101,7 +120,7 @@ export function DashboardPage() {
   const filterLabels = [
     group && STATUS_GROUPS[group].label,
     state && STATUS_LABEL[state],
-    host && hostOptions.find((h) => h.id === host)?.name,
+    host && (hostOptions.find((h) => h.id === host)?.name ?? HOST_NOT_LOADED_OPTION),
     project,
     provider && PROVIDERS[provider].label,
   ].filter((l): l is string => Boolean(l));
@@ -113,7 +132,7 @@ export function DashboardPage() {
 
   return (
     <main className="page">
-      <PageHeader eyebrow={api.kind === "demo" ? "Sessions · simulated" : "Sessions"} title={headline(data, counts.attention)}>
+      <PageHeader eyebrow={api.kind === "demo" ? "Sessions · simulated" : "Sessions"} title={title}>
         {api.kind === "demo" ? (
           <>You're viewing demo data. Nothing here is real Claude activity.</>
         ) : (
@@ -129,12 +148,28 @@ export function DashboardPage() {
         </p>
       )}
 
-      {isLoading ? (
+      {availability.kind === "loading" ? (
         <SessionListSkeleton />
-      ) : error ? (
-        <ErrorState error={error} onRetry={refetch} />
+      ) : availability.kind === "failed" ? (
+        <ErrorState error={views.sessionsError ?? views.hostsError ?? new Error()} onRetry={views.refetch} />
+      ) : availability.kind === "main_missing" ? (
+        <MissingDataNotice title="Sessions couldn't be loaded." error={views.sessionsError} onRetry={views.refetchSessions}>
+          <HostSummary total={hosts.data?.length ?? null} online={onlineHosts} />
+        </MissingDataNotice>
       ) : (
         <>
+          {availability.contextMissing && (
+            <MissingDataNotice title="Host status couldn't be loaded." error={views.hostsError} onRetry={views.refetchHosts}>
+              <p>Sessions show their last reported state, which may be out of date: Tavro can't tell whether their hosts are online until the host list loads.</p>
+            </MissingDataNotice>
+          )}
+          <RefreshFailedNotice failure={views.refresh} now={now} onRetry={views.refetch} />
+          {asOf !== null && (
+            <p className="counts-as-of">
+              <IconClock />
+              Counts as of {formatDataTime(asOf, now.getTime())}
+            </p>
+          )}
           <div className="overview overview-primary" role="group" aria-label="Filter sessions by attention">
             <button
               type="button"
@@ -206,6 +241,8 @@ export function DashboardPage() {
               <span className="sr-only">Host</span>
               <select className="select" value={host ?? ""} onChange={(e) => update({ host: e.target.value || null }, "push")}>
                 <option value="">All hosts</option>
+                {/* A URL-selected host kept while the host list isn't loaded. */}
+                {host && !hostsReady && <option value={host}>{HOST_NOT_LOADED_OPTION}</option>}
                 {hostOptions.map((h) => (
                   <option key={h.id} value={h.id}>
                     {h.name}
@@ -272,12 +309,25 @@ export function DashboardPage() {
 
           {data?.length === 0 ? (
             <div className="section">
-              <EmptyState title="No sessions yet">
-                <p>Sessions appear here once a paired connector reports them.</p>
-                <Link to="/hosts" className="btn">
-                  Pair a host
-                </Link>
-              </EmptyState>
+              {hosts.data?.length === 0 ? (
+                <EmptyState title="No hosts paired yet" icon={<IconHost />}>
+                  <p>Pair the laptop where Claude Code runs; its sessions appear here once its connector reports them.</p>
+                  <Link to="/hosts" className="btn">
+                    Pair a host
+                  </Link>
+                </EmptyState>
+              ) : (
+                <EmptyState title="No sessions yet">
+                  <p>
+                    {onlineHosts === null
+                      ? "Sessions appear here once a paired connector reports them."
+                      : `${onlineHosts} of ${hosts.data?.length ?? 0} paired ${hosts.data?.length === 1 ? "host is" : "hosts are"} online. Sessions appear here once a connector reports them.`}
+                  </p>
+                  <Link to="/hosts" className="btn">
+                    View hosts
+                  </Link>
+                </EmptyState>
+              )}
             </div>
           ) : filtered.length === 0 ? (
             <div className="section">
@@ -309,11 +359,21 @@ export function DashboardPage() {
   );
 }
 
-function headline(data: SessionView[] | undefined, attention: number): string {
-  if (!data) return "Sessions";
-  if (data.length === 0) return "No sessions yet";
-  if (attention === 0) return "All clear. Nothing needs you.";
-  return attention === 1 ? "1 session needs you." : `${attention} sessions need you.`;
+/** What is still known while sessions can't load: the host list, judged like the Hosts page. */
+function HostSummary({ total, online }: { total: number | null; online: number | null }) {
+  if (total === null || online === null) return null;
+  if (total === 0) {
+    return (
+      <p className="host-summary">
+        No hosts are paired yet. <Link to="/hosts">Pair a host</Link>
+      </p>
+    );
+  }
+  return (
+    <p className="host-summary">
+      Your hosts loaded: {online} of {total} online. <Link to="/hosts">View hosts</Link>
+    </p>
+  );
 }
 
 export function SessionSection({
@@ -377,10 +437,11 @@ export function SessionCard({ session: s, now, unreadAlerts = 0 }: { session: Se
             <span className="mono">{s.project_label}</span>
           </span>
         )}
-        <span className={s.hostConnectivity === "online" ? undefined : "conn conn-disconnected"}>
+        {/* No host list, no connectivity: the name says so and nothing claims online or offline. */}
+        <span className={s.hostConnectivity === "online" || s.hostConnectivity === null ? undefined : "conn conn-disconnected"}>
           <IconHost />
           {s.hostName}
-          {s.hostConnectivity !== "online" && <> · offline</>}
+          {s.hostConnectivity !== "online" && s.hostConnectivity !== null && <> · offline</>}
         </span>
         {s.provider !== "mock" && (
           <span>

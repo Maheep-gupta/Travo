@@ -1,8 +1,8 @@
 import { Link, useParams } from "react-router";
 import type { HostRow } from "@mc/contracts";
-import { buildHostView, hostSourceOk, relativeTime, type HostConnectivity } from "@mc/domain";
+import { buildHostView, hostSourceOk, pageAvailability, relativeTime, syncWithRefreshes, type HostConnectivity } from "@mc/domain";
 import { useApi } from "../api-context.js";
-import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, SessionListSkeleton } from "../components.js";
+import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, MissingDataNotice, RefreshFailedNotice, SessionListSkeleton } from "../components.js";
 import { useConnection, useHosts, useNow, useSessionViews } from "../hooks.js";
 import { IconAlert, IconArrowLeft, IconHost } from "../icons.js";
 import { FreshnessNote, SessionSection } from "./DashboardPage.js";
@@ -18,11 +18,14 @@ export function HostPage() {
   const now = useNow();
   const hosts = useHosts();
   const sessions = useSessionViews();
-  const sync = useConnection(now).kind;
+  // A failed refresh of the host list makes this host stale at once, judged as of its last fetch.
+  const sync = syncWithRefreshes(useConnection(now).kind, [sessions.hosts]);
   const host = hosts.data?.find((h) => h.id === id);
+  // The host is the subject; its sessions load separately and fail on their own.
+  const availability = pageAvailability({ main: sessions.hosts });
 
   // Every state keeps a page-level h1 (visually hidden where the design has none).
-  if (hosts.isLoading) {
+  if (availability.kind === "loading") {
     return (
       <main className="page">
         <h1 className="sr-only">Host</h1>
@@ -30,11 +33,11 @@ export function HostPage() {
       </main>
     );
   }
-  if (hosts.error) {
+  if (availability.kind !== "shown") {
     return (
       <main className="page">
         <h1 className="sr-only">Host</h1>
-        <ErrorState error={hosts.error} onRetry={() => void hosts.refetch()} />
+        <ErrorState error={hosts.error ?? new Error()} onRetry={() => void hosts.refetch()} />
       </main>
     );
   }
@@ -69,6 +72,7 @@ export function HostPage() {
         </div>
         <h1>{host.name}</h1>
       </header>
+      <RefreshFailedNotice failure={sessions.refresh} now={now} onRetry={sessions.refetch} />
 
       <div className="host-detail-grid">
         <section className="card" aria-labelledby="h-health">
@@ -132,13 +136,15 @@ export function HostPage() {
         </section>
       </div>
 
-      {sessions.isLoading ? (
+      {sessions.sessions === "loading" ? (
         <div className="section">
           <SessionListSkeleton count={2} />
         </div>
-      ) : sessions.error ? (
+      ) : sessions.sessions === "failed" ? (
         <div className="section">
-          <ErrorState error={sessions.error} onRetry={sessions.refetch} />
+          <MissingDataNotice title="Sessions couldn't be loaded." error={sessions.sessionsError} onRetry={sessions.refetchSessions}>
+            <p>This host's details above are unaffected; its sessions appear once the session list loads.</p>
+          </MissingDataNotice>
         </div>
       ) : own.length ? (
         <SessionSection title={`Sessions on ${host.name}`} sessions={own} now={now} />

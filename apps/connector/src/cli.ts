@@ -2,10 +2,11 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { Connector } from "./connector.js";
-import { loadConfig } from "./config.js";
+import { REAL_ADAPTER_ENABLED, loadConfig } from "./config.js";
 import { loadCredentials } from "./credentials.js";
 import { pairHost } from "./pairing.js";
 import { readRemoteControlPolicy } from "./policy.js";
+import { createClaudeCodeProvider, formatClaudeCodeDiagnosis } from "./providers/claude-code.js";
 import { MockProvider } from "./providers/mock.js";
 import { MemoryTransport } from "./transports/memory.js";
 import { SupabaseTransport } from "./transports/supabase.js";
@@ -24,6 +25,7 @@ Usage:
   npm run connector -- demo              Run the mock provider offline (no backend) with simulated outages
   npm run connector -- pair <CODE>       Pair this machine using a code from the web app
   npm run connector -- run               Sync to the configured Supabase project
+  npm run connector -- doctor            Check the Claude Code CLI (counts only; disabled in this build)
 
 Configuration: apps/connector/.env (see .env.example). No inbound ports are opened.`);
   process.exit(1);
@@ -69,6 +71,18 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "doctor") {
+    // One read-only, content-free check of the Claude Code CLI: version,
+    // compatibility, session counts per status. Nothing is sent anywhere.
+    if (!REAL_ADAPTER_ENABLED) {
+      throw new Error("doctor runs the real Claude Code CLI, which is disabled in this build (REAL_ADAPTER_ENABLED=false). See docs/INTEGRATIONS.md.");
+    }
+    const diagnosis = await createClaudeCodeProvider({ log }).diagnose();
+    for (const line of formatClaudeCodeDiagnosis(diagnosis)) log(line);
+    process.exitCode = diagnosis.ok ? 0 : 1;
+    return;
+  }
+
   if (!config.MC_SUPABASE_URL || !config.MC_SUPABASE_PUBLISHABLE_KEY) {
     throw new Error("Set MC_SUPABASE_URL and MC_SUPABASE_PUBLISHABLE_KEY in apps/connector/.env");
   }
@@ -93,7 +107,8 @@ async function main(): Promise<void> {
     const remoteControlAllowed = await readRemoteControlPolicy();
     log(`provider=${config.MC_PROVIDER} remote_control_allowed=${String(remoteControlAllowed)} (remote commands are disabled in this release)`);
     const connector = new Connector({
-      provider: new MockProvider(),
+      // loadConfig refuses claude-code while REAL_ADAPTER_ENABLED is false, so this branch only runs after an authorized flip.
+      provider: config.MC_PROVIDER === "claude-code" ? createClaudeCodeProvider({ log }) : new MockProvider(),
       transport: new SupabaseTransport(config.MC_SUPABASE_URL, config.MC_SUPABASE_PUBLISHABLE_KEY, creds),
       platform: process.platform,
       version: VERSION,

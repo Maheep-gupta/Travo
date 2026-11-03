@@ -1,10 +1,31 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { Link, useParams } from "react-router";
-import type { Capability, SessionStatus } from "@mc/contracts";
-import { ALERT_LABEL, EMPTY_DASHBOARD_FILTER, PROVIDERS, STATUS_LABEL, hasCapability, relativeTime, sessionAlerts, untrustedHostReason } from "@mc/domain";
+import type { Capability, SessionEventRow, SessionStatus } from "@mc/contracts";
+import {
+  ALERT_LABEL,
+  EMPTY_DASHBOARD_FILTER,
+  PROVIDERS,
+  STATUS_LABEL,
+  hasCapability,
+  pageAvailability,
+  relativeTime,
+  sessionAlerts,
+  sourceState,
+  untrustedHostReason,
+} from "@mc/domain";
 import { useAlerts } from "../alerts-context.js";
 import { useApi } from "../api-context.js";
-import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, SessionListSkeleton, Spinner, StatusBadge } from "../components.js";
+import {
+  ConnectivityBadge,
+  DemoTag,
+  EmptyState,
+  ErrorState,
+  MissingDataNotice,
+  RefreshFailedNotice,
+  SessionListSkeleton,
+  Spinner,
+  StatusBadge,
+} from "../components.js";
 import { useNow, useSessionViews, userKey, useUserId } from "../hooks.js";
 import { IconArrowLeft, IconBell, IconCheck, IconFolder, IconHost, IconLock, IconSessions } from "../icons.js";
 import { dashboardFilterParams } from "../view-model.js";
@@ -44,20 +65,27 @@ export function SessionPage() {
   const session = sessions.data?.find((s) => s.id === id);
   const alerts = useAlerts();
 
+  // Also fetched when the session list failed: the history is still worth showing on its own.
   const events = useQuery({
     queryKey: userKey(api, userId, "sessions", "events", id),
     queryFn: () => api.listEvents(id, 100),
-    enabled: Boolean(session),
+    enabled: Boolean(session) || sessions.sessions === "failed",
   });
+  // Message content stays behind the session's own capability, so it never loads without the session.
   const canReadMessages = session ? hasCapability(session.capabilities, "read_messages") : false;
   const messages = useQuery({
     queryKey: userKey(api, userId, "sessions", "messages", id),
     queryFn: () => api.listMessages(id, 30),
     enabled: canReadMessages,
   });
+  const availability = pageAvailability({
+    main: sessions.sessions,
+    context: sessions.hosts,
+    fallback: sourceState({ hasData: events.data !== undefined, failed: events.isError }),
+  });
 
   // Every state keeps a page-level h1 (visually hidden where the design has none).
-  if (sessions.isLoading) {
+  if (availability.kind === "loading") {
     return (
       <main className="page">
         <h1 className="sr-only">Session</h1>
@@ -65,11 +93,33 @@ export function SessionPage() {
       </main>
     );
   }
-  if (sessions.error) {
+  if (availability.kind === "failed") {
     return (
       <main className="page">
         <h1 className="sr-only">Session</h1>
-        <ErrorState error={sessions.error} onRetry={sessions.refetch} />
+        <ErrorState
+          error={sessions.sessionsError ?? new Error()}
+          onRetry={() => {
+            sessions.refetchSessions();
+            void events.refetch();
+          }}
+        />
+      </main>
+    );
+  }
+  if (availability.kind === "main_missing") {
+    return (
+      <main className="page">
+        <Link to="/" className="back">
+          <IconArrowLeft />
+          Sessions
+        </Link>
+        <h1 className="sr-only">Session</h1>
+        <MissingDataNotice title="Session details couldn't be loaded." error={sessions.sessionsError} onRetry={sessions.refetchSessions}>
+          {/* The id isn't confirmed: the database answers an id that isn't yours with an empty history, not an error. */}
+          <p>Its current state is unknown until the session list loads. If this session exists, its recorded history appears below.</p>
+        </MissingDataNotice>
+        <StatusHistory events={events} now={now} unconfirmed />
       </main>
     );
   }
@@ -91,7 +141,9 @@ export function SessionPage() {
   const available = ALL_CAPABILITIES.filter((c) => hasCapability(session.capabilities, c));
   const unavailable = ALL_CAPABILITIES.filter((c) => !hasCapability(session.capabilities, c));
   const canReply = hasCapability(session.capabilities, "send_message");
-  const untrusted = session.displayStatus === "disconnected" || session.displayStatus === "source_unavailable";
+  // Without the host list the status is as last reported: never vouched for, so its reason isn't shown either.
+  const hostsMissing = session.hostConnectivity === null;
+  const untrusted = hostsMissing || session.displayStatus === "disconnected" || session.displayStatus === "source_unavailable";
   const reasonText = untrusted ? null : session.status_reason;
   const related = sessionAlerts(alerts, session.id);
   const dashboardLink = (patch: { host?: string; provider?: typeof session.provider }) =>
@@ -147,48 +199,16 @@ export function SessionPage() {
         )}
       </header>
 
+      {availability.kind === "shown" && availability.contextMissing && (
+        <MissingDataNotice title="Host status couldn't be loaded." error={sessions.hostsError} onRetry={sessions.refetchHosts}>
+          <p>This is the session's last reported state. Whether its host is online, and whether that state is current, is unknown until the host list loads.</p>
+        </MissingDataNotice>
+      )}
+      <RefreshFailedNotice failure={sessions.refresh} now={now} onRetry={sessions.refetch} />
+
       <div className="detail-grid">
         <div className="detail-main">
-          <section className="card" aria-labelledby="h-history">
-            <div className="card-title">
-              <h2 id="h-history">Status history</h2>
-              {events.data && <span className="eyebrow">{events.data.length} events</span>}
-            </div>
-            {events.isLoading ? (
-              <Spinner />
-            ) : events.error ? (
-              <ErrorState error={events.error} onRetry={() => void events.refetch()} />
-            ) : events.data?.length ? (
-              <ol className="timeline">
-                {events.data.map((e) => {
-                  const st = e.status ?? "unknown";
-                  return (
-                    <li key={e.id} className={`st-${st}`}>
-                      <span className={`tl-dot ${HOLLOW.has(st) || e.type === "session_ended" ? "hollow" : ""}`} aria-hidden="true" />
-                      <div className="tl-body">
-                        <div className="tl-head">
-                          <b>
-                            {e.type === "session_discovered"
-                              ? `Discovered · ${STATUS_LABEL[st]}`
-                              : e.type === "session_ended"
-                                ? "Session ended"
-                                : STATUS_LABEL[st]}
-                          </b>
-                          {e.is_demo && <DemoTag />}
-                          <time className="tl-time" dateTime={e.occurred_at} title={formatTime(e.occurred_at)}>
-                            {relativeTime(e.occurred_at, now)}
-                          </time>
-                        </div>
-                        {e.summary && <p>{e.summary}</p>}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
-            ) : (
-              <p className="muted">No status changes recorded yet.</p>
-            )}
-          </section>
+          <StatusHistory events={events} now={now} />
 
           <section className="card" aria-labelledby="h-alerts">
             <div className="card-title">
@@ -221,13 +241,19 @@ export function SessionPage() {
               <h2 id="h-messages">Recent messages</h2>
               {session.is_demo && <DemoTag />}
             </div>
+            {/* A failed refresh keeps the messages that loaded. */}
+            {canReadMessages && messages.data !== undefined && messages.isError && (
+              <MissingDataNotice title="Couldn't refresh the messages." error={messages.error} onRetry={() => void messages.refetch()} />
+            )}
             {!canReadMessages ? (
               <p className="muted">This integration doesn't provide message content.</p>
-            ) : messages.isLoading ? (
-              <Spinner />
-            ) : messages.error ? (
-              <ErrorState error={messages.error} onRetry={() => void messages.refetch()} />
-            ) : messages.data?.length ? (
+            ) : messages.data === undefined ? (
+              messages.error ? (
+                <ErrorState error={messages.error} onRetry={() => void messages.refetch()} />
+              ) : (
+                <Spinner />
+              )
+            ) : messages.data.length ? (
               <ol className="transcript">
                 {messages.data.map((m) => (
                   <li key={m.external_uuid} className={`msg msg-${m.role}`}>
@@ -280,7 +306,11 @@ export function SessionPage() {
                 <dd>
                   {session.hostName}
                   <br />
-                  <ConnectivityBadge connectivity={session.hostConnectivity} />
+                  {session.hostConnectivity === null ? (
+                    <span className="muted">Status unknown</span>
+                  ) : (
+                    <ConnectivityBadge connectivity={session.hostConnectivity} />
+                  )}
                 </dd>
               </div>
               <div>
@@ -301,7 +331,7 @@ export function SessionPage() {
               </div>
             </dl>
             <ul className="session-filters" aria-label="Find similar sessions">
-              {session.freshness.reason !== "host_unknown" && (
+              {!hostsMissing && session.freshness.reason !== "host_unknown" && (
                 <li>
                   <Link to={dashboardLink({ host: session.host_id })}>All sessions on {session.hostName}</Link>
                 </li>
@@ -344,5 +374,58 @@ export function SessionPage() {
         </aside>
       </div>
     </main>
+  );
+}
+
+/** The session's recorded status changes; shown on its own when the session list fails. */
+/** `unconfirmed`: the session itself couldn't be loaded, so an empty history mustn't suggest it exists. */
+function StatusHistory({ events, now, unconfirmed = false }: { events: UseQueryResult<SessionEventRow[]>; now: Date; unconfirmed?: boolean }) {
+  return (
+    <section className="card" aria-labelledby="h-history">
+      <div className="card-title">
+        <h2 id="h-history">Status history</h2>
+        {events.data && <span className="eyebrow">{events.data.length} events</span>}
+      </div>
+      {/* A failed refresh keeps the history that loaded. */}
+      {events.data !== undefined && events.isError && (
+        <MissingDataNotice title="Couldn't refresh the history." error={events.error} onRetry={() => void events.refetch()} />
+      )}
+      {events.data === undefined ? (
+        events.error ? (
+          <ErrorState error={events.error} onRetry={() => void events.refetch()} />
+        ) : (
+          <Spinner />
+        )
+      ) : events.data.length ? (
+        <ol className="timeline">
+          {events.data.map((e) => {
+            const st = e.status ?? "unknown";
+            return (
+              <li key={e.id} className={`st-${st}`}>
+                <span className={`tl-dot ${HOLLOW.has(st) || e.type === "session_ended" ? "hollow" : ""}`} aria-hidden="true" />
+                <div className="tl-body">
+                  <div className="tl-head">
+                    <b>
+                      {e.type === "session_discovered"
+                        ? `Discovered · ${STATUS_LABEL[st]}`
+                        : e.type === "session_ended"
+                          ? "Session ended"
+                          : STATUS_LABEL[st]}
+                    </b>
+                    {e.is_demo && <DemoTag />}
+                    <time className="tl-time" dateTime={e.occurred_at} title={formatTime(e.occurred_at)}>
+                      {relativeTime(e.occurred_at, now)}
+                    </time>
+                  </div>
+                  {e.summary && <p>{e.summary}</p>}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <p className="muted">{unconfirmed ? "No recorded history to show." : "No status changes recorded yet."}</p>
+      )}
+    </section>
   );
 }

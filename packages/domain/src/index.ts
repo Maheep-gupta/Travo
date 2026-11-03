@@ -12,3 +12,4 @@ export * from "./alert-bursts.js";
 export * from "./pairing.js";
 export * from "./session-views.js";
 export * from "./dashboard.js";
+export * from "./data-availability.js";

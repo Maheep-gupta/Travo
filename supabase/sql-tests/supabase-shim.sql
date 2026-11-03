@@ -18,9 +18,10 @@
 --     its triggers, token signing and expiry don't exist: tests write the JWT
 --     claims directly, so "GoTrue only puts server-set app_metadata in tokens"
 --     is assumed here, not tested.
---   * No PostgREST, Realtime, Storage or Edge Functions. Only the publication
---     the v1 migration alters is created; Realtime's RLS-filtered delivery is
---     not exercised.
+--   * No PostgREST, Realtime, Storage or Edge Functions. Only the publication,
+--     plus the realtime.messages table and realtime.topic() (end of file), that
+--     the migrations alter or reference are created; Realtime delivery is not
+--     exercised.
 --   * Postgres major version is PGlite's (18 at the time of writing), not the
 --     project's Supabase image.
 
@@ -83,4 +84,32 @@ language sql stable as $$
     nullif(current_setting('request.jwt.claim', true), ''),
     nullif(current_setting('request.jwt.claims', true), '')
   )::jsonb
+$$;
+
+-- Realtime Authorization (private channels): only what the migrations
+-- reference. On Supabase the Realtime service creates these in its own
+-- migrations (partitioned table, more columns, its own grants); the grants
+-- here are an approximation. Realtime decides a private-channel join by
+-- running a SELECT on realtime.messages as the subscriber, with
+-- `realtime.topic` set to the channel topic. The tests emulate that check;
+-- the Realtime service itself is not exercised.
+create schema realtime;
+grant usage on schema realtime to anon, authenticated, service_role;
+
+create table realtime.messages (
+  id uuid primary key default gen_random_uuid(),
+  topic text not null,
+  extension text not null,
+  event text,
+  payload jsonb,
+  private boolean default false,
+  inserted_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+alter table realtime.messages enable row level security;
+grant select, insert, update on realtime.messages to anon, authenticated;
+
+create function realtime.topic() returns text
+language sql stable as $$
+  select nullif(current_setting('realtime.topic', true), '')::text
 $$;

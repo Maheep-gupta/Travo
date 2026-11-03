@@ -1,0 +1,6 @@
+[
+  {
+    "pid": 41011,
+    "cwd": "/home/dev/projects/kappa",
+    "sessionId": "00000000-0000-4000-8000-000000000011",
+    "name": "SYNTHETIC-SECRET-MARKER partial

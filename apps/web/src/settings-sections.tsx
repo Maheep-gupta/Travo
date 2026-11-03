@@ -3,13 +3,14 @@
 // it says; anything Tavro can't change yet is shown as information instead.
 import { useContext, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import type { LiveUpdatesStatus } from "@mc/api-client/demo";
 import { MAX_SCHEMA_VERSION } from "@mc/contracts/constants";
 import { MAX_STORED_ALERTS } from "@mc/domain";
 import { forgetAlerts, useAlertStore } from "./alerts-context.js";
 import { useApi, useApiContext } from "./api-context.js";
 import { APP_VERSION, BUILD_MODE, installState, type InstallState } from "./app-info.js";
 import { Notice } from "./components.js";
-import { SignOutReportContext, useUserId } from "./hooks.js";
+import { SignOutReportContext, useLiveUpdatesStatus, useUserId } from "./hooks.js";
 import { IconCheck } from "./icons.js";
 import { clearLocalTavroData } from "./local-data.js";
 import { webStorage } from "./platform.js";
@@ -304,8 +305,16 @@ const INSTALL_LABEL: Record<InstallState, string> = {
   unknown: "Unknown",
 };
 
+/** Server push for session changes. Data stays current either way: the app polls every 30 s. */
+const LIVE_UPDATES_LABEL: Record<LiveUpdatesStatus, string> = {
+  connecting: "Connecting…",
+  on: "On",
+  unavailable: "Unavailable (using 30 s refresh)",
+};
+
 export function ApplicationCard() {
   const [install] = useState(() => installState());
+  const live = useLiveUpdatesStatus();
   return (
     <section className="card" aria-labelledby="h-app">
       <div className="card-title">
@@ -323,6 +332,12 @@ export function ApplicationCard() {
         <span>Running as</span>
         <span>{INSTALL_LABEL[install]}</span>
       </div>
+      {live !== null && (
+        <div className="kv">
+          <span>Live updates</span>
+          <span>{LIVE_UPDATES_LABEL[live]}</span>
+        </div>
+      )}
 
       <h3 className="settings-h3">Install Tavro</h3>
       <ul className="settings-list">
@@ -330,7 +345,7 @@ export function ApplicationCard() {
           <strong>Android (Chrome):</strong> open the ⋮ menu and choose Install app or Add to Home screen.
         </li>
         <li>
-          <strong>iPhone and iPad (Safari):</strong> tap Share, then Add to Home Screen. System notifications on iOS only work from the Home Screen app.
+          <strong>iPhone and iPad (Safari):</strong> tap Share, then Add to Home Screen. Tavro can't show system notifications on iPhone or iPad yet; in-app alerts work.
         </li>
         <li>
           <strong>Desktop (Chrome or Edge):</strong> use the install icon in the address bar, or the browser menu's Install Tavro.

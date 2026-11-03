@@ -9,7 +9,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAxe } from "vitest-axe";
-import { createDemoApi, type AuthUser, type TavroApi } from "@mc/api-client/demo";
+import { createDemoApi, type AuthUser, type LiveUpdates, type LiveUpdatesStatus, type TavroApi } from "@mc/api-client/demo";
 import type { NotificationPrefs } from "@mc/contracts";
 import { DEFAULT_NOTIFICATION_PREFS } from "@mc/contracts/constants";
 import { AlertsProvider } from "../alerts-context.js";
@@ -250,7 +250,7 @@ describe("Settings: system notifications", () => {
     const { Fake, created } = stubNotifications("default", () => "granted");
     await renderSettings();
     expect(Fake.requestPermission).not.toHaveBeenCalled();
-    expect(within(card()).getByText("Your browser will ask for permission.")).toBeTruthy();
+    expect(within(card()).getByText(/^Your browser will ask for permission. On phones, browsers usually only show these through a background service/)).toBeTruthy();
 
     fireEvent.click(within(card()).getByRole("button", { name: "Turn on system notifications" }));
     await waitFor(() => expect(deviceSwitch()?.checked).toBe(true));
@@ -354,13 +354,17 @@ describe("Settings: appearance", () => {
 
   it("follows a theme change made in another tab", async () => {
     await renderSettings();
+    // The page's last render can commit outside act (it follows the async
+    // sign-in), so the card's storage listener may attach only after this
+    // event: wait for the outcome, which the card reaches either way.
     window.localStorage.setItem(THEME_STORAGE_KEY, "dark");
     act(() => {
       window.dispatchEvent(new StorageEvent("storage", { key: THEME_STORAGE_KEY, newValue: "dark" }));
     });
-    expect(radio("Dark").checked).toBe(true);
+    await waitFor(() => expect(radio("Dark").checked).toBe(true));
 
-    // Storage cleared elsewhere (key null): back to System.
+    // Storage cleared elsewhere (key null): back to System. The listener is attached by now.
+    window.localStorage.removeItem(THEME_STORAGE_KEY);
     act(() => {
       window.dispatchEvent(new StorageEvent("storage", { key: null, newValue: null }));
     });
@@ -510,5 +514,29 @@ describe("Settings: integrations and application", () => {
     expect(card.textContent).toContain("Add to Home Screen");
     expect(card.textContent).toContain("Install app");
     expect(card.textContent).toContain("only arrive while Tavro is open");
+    // The demo has no server push to fail, so nothing is claimed about it.
+    expect(card.textContent).not.toContain("Live updates");
+  });
+
+  it("says whether live updates work, and that the 30 s refresh covers them when they don't", async () => {
+    let status: LiveUpdatesStatus | null = "on";
+    const listeners = new Set<() => void>();
+    const liveUpdates: LiveUpdates = {
+      status: () => status,
+      onChange: (cb) => {
+        listeners.add(cb);
+        return () => void listeners.delete(cb);
+      },
+    };
+    backend.api = { ...demo, kind: "supabase", liveUpdates };
+    await renderSettings();
+    const row = () => within(section("Application")).getByText("Live updates").parentElement?.textContent;
+    expect(row()).toBe("Live updatesOn");
+
+    act(() => {
+      status = "unavailable";
+      for (const l of listeners) l();
+    });
+    expect(row()).toBe("Live updatesUnavailable (using 30 s refresh)");
   });
 });

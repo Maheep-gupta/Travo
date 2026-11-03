@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { OBSERVED_AT_MAX_SKEW_MS, type SessionUpsert } from "@mc/contracts";
 import { describe, expect, it } from "vitest";
 import { Connector, MAX_BACKOFF_MS, SKIPPED_WRITES_LIMIT, backoffDelay } from "../src/connector.js";
-import { loadConfig } from "../src/config.js";
+import { REAL_ADAPTER_ENABLED, loadConfig } from "../src/config.js";
 import { loadCredentials } from "../src/credentials.js";
 import { pairHost } from "../src/pairing.js";
 import { readRemoteControlPolicy } from "../src/policy.js";
@@ -250,6 +250,24 @@ describe("Connector", () => {
       expect(transport.messages).toHaveLength(expected);
     }
   });
+
+  it("treats a database that refuses transcripts as a setting, not an outage, and keeps syncing status", async () => {
+    const { provider, transport, connector, logs } = setup({ backendUrl: "http://127.0.0.1:54321", syncTranscripts: true });
+    transport.transcriptsEnabled = false;
+    provider.current = [session("a", "running")];
+    await connector.runOnce();
+    expect(transport.messages).toHaveLength(0);
+    expect(transport.sessions.get("mock:a")?.status).toBe("running");
+    expect(logs.some((l) => l.includes("transcripts not synced"))).toBe(true);
+    expect(logs.some((l) => /offline|unreachable/i.test(l))).toBe(false);
+
+    // Later cycles don't retry the refused writes, and status changes still land.
+    const before = logs.length;
+    provider.current = [session("a", "waiting_for_input")];
+    await connector.runOnce();
+    expect(transport.sessions.get("mock:a")?.status).toBe("waiting_for_input");
+    expect(logs.slice(before).some((l) => l.includes("transcripts not synced"))).toBe(false);
+  });
 });
 
 describe("Connector with a clock behind the backend's stored observations", () => {
@@ -381,7 +399,10 @@ describe("MemoryTransport stale-write guard (mirrors schema v3)", () => {
 
 describe("config", () => {
   it("keeps the real adapter disabled", () => {
+    // Security baseline (CLAUDE.md): flipping this needs explicit founder approval.
+    expect(REAL_ADAPTER_ENABLED).toBe(false);
     expect(() => loadConfig({ MC_PROVIDER: "claude-code" })).toThrow(/disabled/);
+    expect(() => loadConfig({ MC_PROVIDER: "claude-code", MC_SUPABASE_URL: "https://abc.supabase.co" })).toThrow(/disabled/);
     expect(loadConfig({}).MC_PROVIDER).toBe("mock");
   });
   it("rejects secret keys and insecure URLs", () => {

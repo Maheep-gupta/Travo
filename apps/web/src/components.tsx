@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { ApiError } from "@mc/api-client/demo";
-import { STATUS_LABEL, type DisplayStatus, type HostConnectivity } from "@mc/domain";
+import { STATUS_LABEL, formatDataTime, type DisplayStatus, type HostConnectivity, type RefreshFailure, type StatusSource } from "@mc/domain";
 import { IconAlert, IconCheck, IconInbox, IconInfo } from "./icons.js";
 
 export function StatusBadge({ status, variant = "plain" }: { status: DisplayStatus; variant?: "plain" | "pill" | "lg" }) {
@@ -74,12 +74,18 @@ export function Notice({ tone = "info", children, role }: { tone?: NoticeTone; c
   );
 }
 
+/**
+ * Only ApiError messages are written for users; anything else (e.g. a
+ * schema-parse error) could expose field names or values.
+ */
+function safeErrorMessage(error: Error | null): string {
+  return error instanceof ApiError && error.message ? error.message : "Something went wrong. Try again in a moment.";
+}
+
 export function ErrorState({ error, onRetry }: { error: Error; onRetry?: () => void }) {
   return (
     <Notice tone="error">
-      {/* Only ApiError messages are written for users; anything else (e.g. a
-          schema-parse error) could expose field names or values. */}
-      <p>{error instanceof ApiError && error.message ? error.message : "Something went wrong. Try again in a moment."}</p>
+      <p>{safeErrorMessage(error)}</p>
       {onRetry && (
         <div className="actions">
           <button type="button" className="btn small" onClick={onRetry}>
@@ -88,6 +94,69 @@ export function ErrorState({ error, onRetry }: { error: Error; onRetry?: () => v
         </div>
       )}
     </Notice>
+  );
+}
+
+/**
+ * One source failed while the rest of the page loaded (spec 3.5 partial data):
+ * names what is missing, says what that means for what is shown, and offers a
+ * retry. Announced like an error; the page around it stays usable.
+ */
+export function MissingDataNotice({
+  title,
+  error,
+  onRetry,
+  children,
+}: {
+  title: string;
+  error: Error | null;
+  onRetry: () => void;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="missing-data">
+      <Notice tone="warn" role="alert">
+        <p>
+          <strong>{title}</strong> {safeErrorMessage(error)}
+        </p>
+        {children}
+        <div className="actions">
+          <button type="button" className="btn small" onClick={onRetry}>
+            Try again
+          </button>
+        </div>
+      </Notice>
+    </div>
+  );
+}
+
+const REFRESH_SOURCE_LABEL: Record<StatusSource, string> = { sessions: "sessions", hosts: "host status" };
+
+/**
+ * A status list's latest refresh failed after it had loaded: its data stays on
+ * screen (marked stale), this says from when, and offers a retry. Polite, as
+ * the offline banner may say much the same once the outage lasts.
+ */
+export function RefreshFailedNotice({ failure, now, onRetry }: { failure: RefreshFailure | null; now: Date; onRetry: () => void }) {
+  if (!failure) return null;
+  const what = failure.sources.map((s) => REFRESH_SOURCE_LABEL[s]).join(" and ");
+  const from = failure.dataFrom === null ? "earlier" : formatDataTime(failure.dataFrom, now.getTime());
+  return (
+    <div className="missing-data">
+      <Notice tone="warn" role="status">
+        <p>
+          <strong>
+            Couldn't refresh {what} — showing data from {from}.
+          </strong>{" "}
+          Statuses may have changed since then. Tavro keeps trying.
+        </p>
+        <div className="actions">
+          <button type="button" className="btn small" onClick={onRetry}>
+            Try again
+          </button>
+        </div>
+      </Notice>
+    </div>
   );
 }
 

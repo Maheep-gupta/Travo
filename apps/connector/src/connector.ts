@@ -1,5 +1,6 @@
 import type { SessionStatus, SessionUpsert } from "@mc/contracts";
-import { HEARTBEAT_INTERVAL_MS, effectiveCapabilities, diffObservations, transcriptContentDecision } from "@mc/domain";
+import { HEARTBEAT_INTERVAL_MS, effectiveCapabilities, diffObservations, transcriptContentDecision, type SessionTransition } from "@mc/domain";
+import { HostAuthError, TranscriptsRefusedError } from "./transports/errors.js";
 import type { EventInput, KnownSession, MessageInput, Provider, Transport } from "./types.js";
 
 /**
@@ -7,8 +8,12 @@ import type { EventInput, KnownSession, MessageInput, Provider, Transport } from
  * (e.g. the CLI is missing, timed out or printed something unparseable).
  * Kept apart from "offline" so a local tool problem is never reported as the
  * backend being down, and so heartbeats keep the host online meanwhile.
+ *
+ * "auth_failed": the backend refused this host (login rejected, or revoked).
+ * Only re-pairing fixes that, so it is retried rarely (AUTH_RETRY_MS) instead
+ * of with the offline backoff, and is never reported as a network problem.
  */
-export type ConnectionState = "starting" | "online" | "offline" | "provider_error";
+export type ConnectionState = "starting" | "online" | "offline" | "provider_error" | "auth_failed";
 
 /** A failure of the provider (session source), as opposed to the transport. */
 export class ProviderError extends Error {
@@ -32,6 +37,14 @@ export interface ConnectorOptions {
 }
 
 export const MAX_BACKOFF_MS = 60_000;
+
+/**
+ * Retry interval while the backend refuses this host. Not "stop until
+ * restart": a refusal that was misread, or credentials restored by the owner,
+ * then heal on their own, and a supervised service isn't left dead or
+ * restart-looping. Four sign-in attempts an hour is negligible load.
+ */
+export const AUTH_RETRY_MS = 15 * 60_000;
 
 /**
  * Consecutive cycles in which session writes didn't land, although the
@@ -58,6 +71,16 @@ export class Connector {
   private state: ConnectionState = "starting";
   private known = new Map<string, KnownSession>();
   private loadedKnown = false;
+  /**
+   * Transitions of a cycle that failed part-way, by external_id, with the time
+   * they were first observed. A write can land although its response is lost
+   * (a dropped socket, the lid closing mid-request), so the retry of the same
+   * transition must reuse its dedupe key rather than make one from a later
+   * observation time, or the event is recorded twice.
+   */
+  private unconfirmed = new Map<string, SessionTransition & { at: string }>();
+  /** Set once the database refuses transcript rows (storage disabled there); cleared by a restart. */
+  private transcriptsRefused = false;
   private failures = 0;
   private lastHeartbeat = 0;
   private offlineSince: Date | null = null;
@@ -90,6 +113,8 @@ export class Connector {
       const secondsSince = (since: Date) => Math.round((now.getTime() - since.getTime()) / 1000);
       if (this.state === "provider_error" && this.providerFailingSince) {
         this.log(`provider recovered: ${this.opts.provider.id} after ${secondsSince(this.providerFailingSince)}s`);
+      } else if (this.state === "auth_failed") {
+        this.log(`online: the backend accepts this host again (${this.opts.transport.backendUrl})`);
       } else if (this.state !== "online") {
         const after = this.offlineSince ? ` after ${secondsSince(this.offlineSince)}s offline` : "";
         this.log(`online: connected to ${this.opts.transport.backendUrl}${after}`);
@@ -101,6 +126,21 @@ export class Connector {
       return this.pollMs;
     } catch (e) {
       this.failures += 1;
+      if (e instanceof HostAuthError) {
+        if (this.state !== "auth_failed") {
+          const fix =
+            e.remedy === "check_publishable_key"
+              ? "The project rejected the publishable key: check MC_SUPABASE_PUBLISHABLE_KEY in apps/connector/.env (it may have been rotated); pairing again won't help"
+              : "This host may have been revoked. Pair it again from the web app (npm run connector -- pair <CODE>)";
+          this.log(`not authorized: ${e.message}. ${fix}; retrying every ${AUTH_RETRY_MS / 60_000} minutes meanwhile`);
+        }
+        this.state = "auth_failed";
+        this.offlineSince = null;
+        // Heartbeat (and report health) at once if it's accepted again.
+        this.lastHeartbeat = 0;
+        this.reportedProviderOk = null;
+        return AUTH_RETRY_MS;
+      }
       // The heartbeat went through but the writes didn't: the host looks
       // online while its statuses freeze. A full outage (heartbeat failed) or a
       // provider failure (already reported) doesn't count.
@@ -167,7 +207,12 @@ export class Connector {
     }
     if (providerError) throw providerError;
     const previous = new Map<string, SessionStatus>([...this.known].map(([k, v]) => [k, v.status]));
-    const transitions = diffObservations(previous, observed, now);
+    const transitions = diffObservations(previous, observed, now).map((t) => {
+      const u = this.unconfirmed.get(t.external_id);
+      return u && u.type === t.type && u.status === t.status ? u : { ...t, at: now.toISOString() };
+    });
+    // Keep only what is still pending: a transition that no longer applies was superseded.
+    this.unconfirmed = new Map(transitions.map((t) => [t.external_id, t]));
     const capabilities = effectiveCapabilities(provider.id, {
       remoteControlAllowed: this.opts.remoteControlAllowed,
       repliesEnabled: false,
@@ -242,13 +287,13 @@ export class Connector {
         summary: t.type === "session_ended" ? "Session closed" : (observed.find((o) => o.external_id === t.external_id)?.last_event_summary ?? null),
         dedupe_key: t.dedupe_key,
         is_demo: provider.isDemo,
-        occurred_at: now.toISOString(),
+        occurred_at: t.at,
       });
     }
     await transport.insertEvents(events);
 
     const content = transcriptContentDecision(transport.backendUrl, this.opts.syncTranscripts);
-    if (content.allowed && provider.messages) {
+    if (content.allowed && provider.messages && !this.transcriptsRefused) {
       const changed = new Set(transitions.map((t) => t.external_id));
       const messages: MessageInput[] = [];
       for (const o of observed) {
@@ -258,7 +303,14 @@ export class Connector {
           messages.push({ ...m, session_id: sessionId, text: m.text.slice(0, 4000) });
         }
       }
-      await transport.insertMessages(messages);
+      try {
+        await transport.insertMessages(messages);
+      } catch (e) {
+        if (!(e instanceof TranscriptsRefusedError)) throw e;
+        // A database setting, not an outage: stop offering transcripts until restart.
+        this.transcriptsRefused = true;
+        this.log(`transcripts not synced: ${e.message}. Status sync continues.`);
+      }
     }
 
     // Commit only after every write succeeded, so a failed cycle is retried in full.
@@ -270,6 +322,8 @@ export class Connector {
       const k = this.known.get(externalId);
       if (k) this.known.set(externalId, { ...k, status: "ended" });
     }
+    // Rows the backend skipped got no event, so their retry needn't reuse a key.
+    this.unconfirmed.clear();
   }
 
   start(): void {

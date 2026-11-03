@@ -38,8 +38,9 @@ let queryClient: QueryClient;
 
 beforeEach(() => {
   clock.offset = 0;
-  // tickMs 0: no timer; the simulation only advances when data is read.
-  backend.api = createDemoApi({ tickMs: 0, now: () => Date.now() + clock.offset, sourceOutageAtMs: 1_000, sourceOutageMs: 60_000 });
+  // tickMs 0: no timer; the simulation only advances when data is read. The outage starts
+  // 30 s in, well clear of a slow test run, and tests that need it move the clock there.
+  backend.api = createDemoApi({ tickMs: 0, now: () => Date.now() + clock.offset, sourceOutageAtMs: 30_000, sourceOutageMs: 60_000 });
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 });
 
@@ -136,7 +137,7 @@ describe("SessionPage", () => {
   it("explains Source not responding while the host is online but its session source fails", async () => {
     const { live } = await demoSessions();
     // Move the demo clock into the configured source outage; the next read heartbeats with an error.
-    clock.offset = 5_000;
+    clock.offset = 35_000;
     renderSession(live.id);
     await heading(live.title ?? live.external_id);
 

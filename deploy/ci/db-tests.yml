@@ -2,10 +2,16 @@
 # on a GitHub-hosted runner, which has Docker. See docs/DB_TESTING.md, option B.
 #
 # To activate (founder decision, D-017): copy to .github/workflows/db-tests.yml
-# and push. Before that, pin each action to a full commit SHA.
+# and push. Before that, pin every `uses:` to a full 40-character commit SHA,
+# with the tag as a trailing comment, e.g.
+#   - uses: actions/checkout@<full-sha> # v4.x.y
+# Look the SHAs up on the actions' own release pages; a tag can be moved by
+# whoever controls the action's repository, a SHA can't.
 #
 # No secrets are used: `supabase start` creates a throwaway local stack inside
 # the runner, with its own generated keys. No session data exists there.
+# `persist-credentials: false` keeps the job's GITHUB_TOKEN out of .git/config,
+# so later steps (npm install scripts, the Supabase CLI) can't read it.
 name: db-tests
 
 on:
@@ -26,8 +32,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v4 # pin to a full SHA before activating
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4 # pin to a full SHA before activating
         with:
           node-version: 24
           cache: npm
@@ -38,8 +46,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v4 # pin to a full SHA before activating
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4 # pin to a full SHA before activating
         with:
           node-version: 24
           cache: npm

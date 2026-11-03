@@ -1,5 +1,5 @@
 import type { NotificationPrefs, SessionStatus } from "@mc/contracts";
-import type { HostConnectivity } from "./hosts.js";
+import { DISCONNECT_AFTER_MS, type HostConnectivity } from "./hosts.js";
 
 /**
  * Tavro Alerts: attention events derived by comparing successive snapshots of
@@ -95,6 +95,15 @@ export interface AlertSnapshot {
   hosts: ReadonlyMap<string, HostConnectivity>;
   /** Source health per host, recorded only while the host was online (otherwise unknown). */
   sources: ReadonlyMap<string, boolean>;
+  /** When the hosts of this snapshot were fetched (client clock, epoch ms); null if not given. */
+  observedAt: number | null;
+  /** First fetch after the client's own last gap (sleep, frozen tab); null if there was none. */
+  watchingSince: number | null;
+  /**
+   * Hosts whose disconnection the sleep grace is holding back: the last_seen_at
+   * it was granted for, and the watch (watchingSince) that granted it.
+   */
+  graced: ReadonlyMap<string, { lastSeenAt: string; watchingSince: number }>;
 }
 
 export interface AlertDetection {
@@ -117,17 +126,36 @@ export interface AlertDetection {
  *   heartbeats) alerts on ok → failing and failing → ok, judged only while the
  *   host is online. Sessions behind a failing source are untrusted exactly
  *   like sessions behind an offline host.
+ * - With `observedAt` (when the host list was fetched), a client that wasn't
+ *   fetching for longer than DISCONNECT_AFTER_MS — its own machine slept, or
+ *   the tab was frozen — can't tell whether a host went quiet while it was
+ *   watching or merely slept too (a closed lid suspends both). Such a
+ *   disconnection is alerted only if the host stays silent for another
+ *   DISCONNECT_AFTER_MS after the client resumed; a host that reports within
+ *   that grace raises neither alert. Its sessions stay untrusted meanwhile.
+ *   The grace is granted once per host and last heartbeat: if a later gap
+ *   ends with the host still on the same last_seen_at, it is alerted at once,
+ *   so a phone opened briefly every few minutes still hears of a dead laptop.
  */
 export function detectAlerts(
   previous: AlertSnapshot | null,
   sessions: readonly AlertSessionInput[],
   hosts: readonly AlertHostInput[],
+  observedAt?: Date,
 ): AlertDetection {
   const alerts: TavroAlert[] = [];
   const hostById = new Map(hosts.map((h) => [h.id, h]));
 
+  const fetchedAt = observedAt ? observedAt.getTime() : null;
+  const lastFetchedAt = previous?.observedAt ?? null;
+  // A gap longer than the disconnect window, or a clock that stepped back, restarts the watch.
+  const gap = fetchedAt !== null && lastFetchedAt !== null && (fetchedAt < lastFetchedAt || fetchedAt - lastFetchedAt > DISCONNECT_AFTER_MS);
+  const watchingSince = gap ? fetchedAt : (previous?.watchingSince ?? null);
+  const inGrace = fetchedAt !== null && watchingSince !== null && fetchedAt - watchingSince < DISCONNECT_AFTER_MS;
+
   const hostSnapshot = new Map<string, HostConnectivity>();
   const sourceSnapshot = new Map<string, boolean>();
+  const gracedSnapshot = new Map<string, { lastSeenAt: string; watchingSince: number }>();
   for (const h of hosts) {
     hostSnapshot.set(h.id, h.connectivity);
     if (h.connectivity === "online") {
@@ -154,7 +182,14 @@ export function detectAlerts(
     const before = previous?.hosts.get(h.id);
     if (!previous || before === undefined || !h.last_seen_at) continue;
     if (before === "online" && h.connectivity === "disconnected") {
-      alerts.push({ id: `h:${h.id}:disconnected:${h.last_seen_at}`, kind: "host_disconnected", sessionId: null, hostId: h.id, at: h.last_seen_at, isDemo: h.is_demo });
+      const granted = previous.graced.get(h.id);
+      // Graced for this same heartbeat during an earlier watch: it had its chance.
+      const spent = granted !== undefined && granted.lastSeenAt === h.last_seen_at && granted.watchingSince !== watchingSince;
+      if (inGrace && watchingSince !== null && !spent) {
+        // Not yet: it may have slept with us. Remember it as online so the alert still fires after the grace.
+        hostSnapshot.set(h.id, "online");
+        gracedSnapshot.set(h.id, { lastSeenAt: h.last_seen_at, watchingSince });
+      } else alerts.push({ id: `h:${h.id}:disconnected:${h.last_seen_at}`, kind: "host_disconnected", sessionId: null, hostId: h.id, at: h.last_seen_at, isDemo: h.is_demo });
     } else if (before === "disconnected" && h.connectivity === "online") {
       alerts.push({ id: `h:${h.id}:online:${h.last_seen_at}`, kind: "host_reconnected", sessionId: null, hostId: h.id, at: h.last_seen_at, isDemo: h.is_demo });
     }
@@ -179,7 +214,7 @@ export function detectAlerts(
     alerts.push({ id: `s:${s.id}:${s.status}:${at}`, kind: s.status as AlertKind, sessionId: s.id, hostId: s.host_id, at, isDemo: s.is_demo });
   }
 
-  return { alerts, snapshot: { sessions: sessionSnapshot, hosts: hostSnapshot, sources: sourceSnapshot } };
+  return { alerts, snapshot: { sessions: sessionSnapshot, hosts: hostSnapshot, sources: sourceSnapshot, observedAt: fetchedAt, watchingSince, graced: gracedSnapshot } };
 }
 
 export const MAX_STORED_ALERTS = 50;

@@ -8,6 +8,7 @@ import { createQueryClient } from "./hooks.js";
 import { webStorage } from "./platform.js";
 import { THEME_STORAGE_KEY, applyThemePreference, loadThemePreference, parseThemePreference } from "./theme.js";
 import "./styles.css";
+import "./mobile.css";
 
 // Before the first React render: the inline script in index.html has already set
 // data-theme; this also syncs the theme-color and color-scheme metas, and still

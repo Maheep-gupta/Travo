@@ -58,20 +58,28 @@ Privacy: the host logs IP addresses, user agents and paths. Paths like `/session
 
 **Region.** Choose the region nearest the user, or whatever data-residency rules require (an IT question). Assume the region can't be changed later.
 
-**What reaches Supabase:**
-- host rows (name, last seen, source health);
-- session rows (status, timestamps, title, provider, aliased project label);
-- session events.
+**What reaches Supabase** (corrected 2026-11-03; the field-by-field table is in `DEPLOYMENT.md` → *What leaves the laptop*):
+- host rows: the name the owner typed when pairing, the platform, the connector version, and last-seen and source-health times;
+- session rows: status, a status reason, timestamps, provider, the Claude session id, a title and a project label;
+- session events (status transitions).
+
+The title and project label are **not aliased**. In the committed connector (`apps/connector/src/providers/claude-code.ts`, commit `5c5d35f`):
+- `title` is the CLI's `name` field from `claude agents --json`, with control characters removed and capped at 300 characters. Claude Code may derive it from the first prompt.
+- `project_label` is the raw last segment of the session's working directory, capped at 200 characters. Only roots, drive letters and home directories themselves are suppressed.
+
+**This is changing:** the provider is being reworked in the working tree, with a generated, content-free title by default and the CLI name opt-in. Update this section and the DEPLOYMENT.md table to whatever is actually committed and deployed.
 
 No transcripts reach Supabase.
 
-**Open risk:** real Claude Code session titles may be derived from prompt text. Resolve this before enabling the real adapter, for example by syncing only a generated label by default.
+**Open risk:** titles may carry prompt text and project labels may carry customer or codenames. Resolve both before enabling the real adapter, for example by syncing only a generated label by default and an alias for the project.
 
 **Realtime vs polling:**
 - Use Realtime for invalidation only, and always refetch through RLS.
 - RLS is not applied to DELETE events, so never subscribe to DELETE. Revocation is already a flag, not a delete.
 - Don't subscribe phones to host heartbeat updates. Compute "disconnected" from `last_seen_at` on a timer.
 - Mobile browsers drop background WebSockets, so keep a slow fallback poll and refetch when the page becomes visible.
+- **As implemented (D-022, migration `20261105000001`):** the app joins a **private** channel `tavro-changes:<random>` and listens to INSERT and UPDATE on `sessions` and `session_events` only. `hosts` is no longer in the `supabase_realtime` publication (the host list is polled), and `session_messages` never was. A SELECT-only policy on `realtime.messages` lets owners, never hosts or anon, join `tavro-changes:*`. With no INSERT policy, nobody can broadcast or track presence there.
+- **Realtime "Allow public access" stays OFF** on a hosted project (DEPLOYMENT.md step 2.5). Public channels would let anyone holding the publishable key join any topic. Live updates are meant to keep working with it off; that is *unverified* until provisioning (DEPLOYMENT.md step 9, check 14).
 
 ## 3. Background push (M6, not approved)
 
@@ -92,24 +100,27 @@ Payloads are encrypted end to end, but Apple and Google see timing and endpoint 
 
 ## 4. Security headers (for `_headers`; start in Report-Only mode)
 
+The source of truth is `deploy/cloudflare/_headers`; `scripts/generate-headers.mjs` writes the deployed copy (DEPLOYMENT.md step 7). Its `/*` block, revised 2026-11-03:
+
 ```
 /*
-  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; upgrade-insecure-requests
+  Content-Security-Policy-Report-Only: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; manifest-src 'self'; worker-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; require-trusted-types-for 'script'; trusted-types 'none'; upgrade-insecure-requests
   Strict-Transport-Security: max-age=63072000; includeSubDomains
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
-  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()
   Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
   X-Frame-Options: DENY
-/assets/*
-  Cache-Control: public, max-age=31536000, immutable
-/index.html
-  Cache-Control: no-cache
-/manifest.webmanifest
-  Cache-Control: no-cache
 ```
 
-- **BYOS means the project URL isn't known at build time.** Hence the `*.supabase.co` wildcard, which means Supabase custom domains are unsupported. Loopback URLs belong only in dev and preview configs.
+The cache rules (`/assets/*` immutable; `/`, `/index.html`, `/manifest.webmanifest` and `/theme-init.js` no-cache) are in the template.
+
+- **BYOS means the project URL isn't known at build time,** so the template carries the `*.supabase.co` wildcard. At deploy time the generator replaces it with the one project's exact origin (`--project-url`); the wildcard ships only with `--wildcard`, as a recorded decision. With an exact origin, a Supabase custom domain works too. Loopback URLs belong only in dev and preview configs.
+- **`worker-src 'none'`:** there is no service worker (D-011). M6 push would have to revisit this.
+- **Trusted Types** start in Report-Only, like the rest of the CSP, to find out whether React or supabase-js write to a DOM sink (*unverified*). Browser support outside Chromium is *unverified*. DEPLOYMENT.md step 10 says what to do if they report.
+- **Report-Only lasts at most 14 days** after the first deployment (DEPLOYMENT.md step 10, with the reasons).
+- **iOS:** the CSP console on an iPhone or iPad can only be read through Safari Web Inspector on a Mac. Without one, iOS CSP behaviour stays *unverified*.
 - **Theme script:** done 2026-11-02. It moved to `public/theme-init.js`, a blocking same-origin script, so `script-src 'self'` covers it with no hash (`theme.dom.test.tsx` asserts there is no inline script).
 - **React inline `style` props** are set through the CSSOM, so they should be fine under `style-src 'self'`. This needs a manual browser check (*unverified*).
 - `frame-ancestors` works only as an HTTP header, not a `<meta>` tag.
@@ -120,13 +131,13 @@ Payloads are encrypted end to end, but Apple and Google see timing and endpoint 
 2. Authorize creating the Supabase project: the region, and Free vs Pro. Then run `test:db` against it, or locally.
 3. Authorize the hosting provider (recommended: Cloudflare), and choose the default subdomain or a custom domain.
 4. Approve deployment.
-5. Accept the `*.supabase.co` wildcard, and with it "custom domains unsupported".
+5. Exact project origin in `connect-src` (recommended, the generator's normal mode), or accept the `*.supabase.co` wildcard so one deployment can serve several projects.
 6. M6 push: the push-only service worker, server-side detection, VAPID secrets and the push-service metadata flow.
 7. Keep D-013 off until the session-title question is answered.
 
 ## What can be prepared locally without authorization
 
-- `_headers` file template.
+- `_headers` file template and its deploy-time generator (`scripts/generate-headers.mjs`).
 - A "project unreachable or paused" state.
 - Visibility-triggered refetch.
 - Deployment runbook.

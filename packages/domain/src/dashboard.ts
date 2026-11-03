@@ -1,5 +1,10 @@
-import type { ProviderId } from "@mc/contracts";
+import type { HostRow, ProviderId } from "@mc/contracts";
 import { PROVIDERS } from "./capabilities.js";
+import type { ConnectionState } from "./connectivity.js";
+import type { RefreshFailure } from "./data-availability.js";
+import type { ClientSync } from "./freshness.js";
+import { hostSourceOk } from "./hosts.js";
+import { buildHostView } from "./session-views.js";
 import {
   DEFAULT_SESSION_SORT,
   isSessionSort,
@@ -171,4 +176,53 @@ export function projectOptions(views: readonly { project_label: string | null }[
   const labels = new Set<string>();
   for (const v of views) if (v.project_label) labels.add(v.project_label);
   return [...labels].sort((a, b) => a.localeCompare(b, "en", { sensitivity: "base" }) || (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
+ * Hosts whose sessions' statuses can be trusted right now: online with a
+ * working source, judged like the Hosts page. Null when the host list
+ * couldn't be loaded, so nothing is known.
+ */
+export function trustedHostCount(hosts: readonly HostRow[] | null, now: Date, client: { sync: ClientSync; fetchedAt: number | null }): number | null {
+  if (hosts === null) return null;
+  return hosts.filter((h) => hostSourceOk(h) && buildHostView(h, now, client).connectivity === "online").length;
+}
+
+export interface HeadlineInput {
+  /** Overview counts of the sessions on screen; null while none have loaded. */
+  counts: StateCounts | null;
+  /** How current the statuses are; a failed refresh counts as not current (syncWithRefreshes). */
+  sync: ClientSync;
+  /** From trustedHostCount. */
+  trustedHosts: number | null;
+}
+
+const needYou = (n: number) => (n === 0 ? "nothing needs you" : n === 1 ? "1 session needs you" : `${n} sessions need you`);
+
+/**
+ * The dashboard headline (spec 3.1: no misleading aggregates). "All clear"
+ * only when the counts are current, at least one host is vouching for its
+ * sessions, and no session on screen is disconnected, behind a failing source
+ * or unknown; otherwise it says what was last known and that it can't be
+ * confirmed, never that nothing needs the user.
+ */
+export function dashboardHeadline({ counts, sync, trustedHosts }: HeadlineInput): string {
+  if (!counts) return "Sessions";
+  if (sync !== "current") return counts.total === 0 ? "Can't confirm right now — last known: no sessions." : `Can't confirm right now — last known: ${needYou(counts.attention)}.`;
+  if (counts.total === 0) return "No sessions yet";
+  if (trustedHosts === null) return `Statuses can't be confirmed — last reported: ${needYou(counts.attention)}.`;
+  if (trustedHosts === 0) return "Statuses can't be confirmed — no host is reporting normally.";
+  if (counts.attention === 0) {
+    // Sessions behind an offline host or failing source can't vouch for themselves, even when another host can.
+    const unconfirmed = STATUS_GROUPS.offline.statuses.reduce((n, s) => n + counts.byState[s], 0);
+    if (unconfirmed > 0) return `Nothing confirmed needs you — ${unconfirmed === 1 ? "1 session" : `${unconfirmed} sessions`} can't be confirmed.`;
+    return "All clear. Nothing needs you.";
+  }
+  return counts.attention === 1 ? "1 session needs you." : `${counts.attention} sessions need you.`;
+}
+
+/** When the overview's counts are from while they aren't current (epoch ms); null while they are, or if unknown. */
+export function countsAsOf(connection: ConnectionState, refresh: RefreshFailure | null): number | null {
+  if (connection.kind !== "current") return connection.dataFrom;
+  return refresh?.dataFrom ?? null;
 }

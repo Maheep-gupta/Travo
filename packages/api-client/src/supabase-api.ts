@@ -8,7 +8,7 @@ import {
   SessionRow,
 } from "@mc/contracts";
 import type { z } from "zod";
-import { ApiError, type AuthUser, type ChangeTopic, type TavroApi } from "./api.js";
+import { ApiError, type AuthUser, type ChangeTopic, type LiveUpdatesStatus, type TavroApi } from "./api.js";
 import { ConnectionConfig } from "./connection.js";
 import type { KeyValueStorage } from "./storage.js";
 
@@ -163,6 +163,12 @@ export function withRequestTimeout(fetchImpl: FetchLike, ms: number = REQUEST_TI
   };
 }
 
+/** Realtime topic prefix the database's realtime.messages policy allows owners to join. */
+export const REALTIME_TOPIC_PREFIX = "tavro-changes:";
+/** What `subscribe` listens to: never hosts (polled) and never DELETE (not RLS-filtered). */
+export const REALTIME_TABLES: readonly ChangeTopic[] = ["sessions", "session_events"];
+export const REALTIME_EVENTS = ["INSERT", "UPDATE"] as const;
+
 /**
  * Supabase-backed implementation. Uses only the publishable key plus the
  * signed-in user's JWT; every query is authorised by RLS in the database.
@@ -201,8 +207,27 @@ export function createSupabaseApi(config: ConnectionConfig, storage: KeyValueSto
     for (const cb of signedOutHere) cb(null);
   }
 
+  // Live-updates status of the latest subscription (`liveChannel`), for Settings. Only the
+  // join state is kept: realtime-js's error object is never stored or passed on.
+  let liveChannel: object | null = null;
+  let liveStatus: LiveUpdatesStatus | null = null;
+  const liveListeners = new Set<() => void>();
+  const setLiveStatus = (channel: object, next: LiveUpdatesStatus | null) => {
+    if (channel !== liveChannel || next === liveStatus) return;
+    liveStatus = next;
+    for (const l of liveListeners) l();
+  };
+
   return {
     kind: "supabase",
+
+    liveUpdates: {
+      status: () => liveStatus,
+      onChange(cb) {
+        liveListeners.add(cb);
+        return () => void liveListeners.delete(cb);
+      },
+    },
 
     async getSchemaVersion() {
       const { data, error, status } = await client.from("app_meta").select("schema_version").maybeSingle();
@@ -320,12 +345,33 @@ export function createSupabaseApi(config: ConnectionConfig, storage: KeyValueSto
     },
 
     subscribe(cb) {
-      const channel = client.channel(`mc-changes-${Math.random().toString(36).slice(2)}`);
-      for (const table of ["sessions", "session_events", "hosts"] as ChangeTopic[]) {
-        channel.on("postgres_changes", { event: "*", schema: "public", table }, () => cb(table));
+      // Invalidation only: payloads are ignored and every refetch goes through
+      // RLS. A private channel, so the project can keep Realtime "Allow public
+      // access" off; migration 20261105000001 lets owners (not hosts) join
+      // `tavro-changes:*` and nobody send on it. The random suffix keeps
+      // channels distinct (realtime-js reuses a channel with the same topic).
+      // Only INSERT and UPDATE: DELETE events are not filtered by RLS, and
+      // rows are never deleted (revocation is a flag). No hosts: their 30 s
+      // heartbeat would wake every client; the host list is polled instead.
+      const channel = client.channel(`${REALTIME_TOPIC_PREFIX}${Math.random().toString(36).slice(2)}`, { config: { private: true } });
+      for (const table of REALTIME_TABLES) {
+        for (const event of REALTIME_EVENTS) {
+          channel.on("postgres_changes", { event, schema: "public", table }, () => cb(table));
+        }
       }
-      channel.subscribe();
+      // A failed join (e.g. the migration not yet applied) loses no data: the
+      // 30 s poll covers a missing channel. It is surfaced in Settings only,
+      // through liveUpdates; realtime-js keeps retrying the join on its own.
+      liveChannel = channel;
+      setLiveStatus(channel, "connecting");
+      channel.subscribe((status) => {
+        if (status === "SUBSCRIBED") setLiveStatus(channel, "on");
+        else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") setLiveStatus(channel, "unavailable");
+      });
       return () => {
+        // Forgotten first, so the CLOSED that removal causes isn't reported.
+        setLiveStatus(channel, null);
+        if (liveChannel === channel) liveChannel = null;
         void client.removeChannel(channel);
       };
     },

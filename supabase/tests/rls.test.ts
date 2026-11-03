@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
+  adminClient,
   anonClient,
   createOwner,
   localEnv,
@@ -365,22 +366,104 @@ describe("revocation", () => {
   });
 });
 
+describe("owner identity fails closed (S4, migration 20261105000001)", () => {
+  it("a host claim with a malformed host_id is neither a host nor an owner", async () => {
+    // app_metadata can only be set with the secret key: this is the shape of a
+    // broken or tampered pair-host user, not something a client can create.
+    const email = `malformed-${randomUUID()}@test.local`;
+    const password = `pw-${randomUUID()}`;
+    const created = await adminClient(env).auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      app_metadata: { mc_role: "host", host_id: "not-a-uuid" },
+    });
+    expect(created.error).toBeNull();
+    const c = await signedIn(env, email, password);
+    expect((await c.from("hosts").select("id")).data ?? []).toEqual([]);
+    expect((await c.from("sessions").select("id")).data ?? []).toEqual([]);
+    expect((await c.rpc("create_host_pairing", { p_name: "x" })).error?.code).toBe("42501");
+    expect((await c.from("notification_prefs").insert({ owner_id: created.data.user?.id })).error).not.toBeNull();
+  });
+});
+
+describe("read-only capabilities (S3, D-003)", () => {
+  it("refuses control capabilities from a host", async () => {
+    for (const cap of ["send_message", "resume", "approve_requests"]) {
+      const r = await hostA.client.from("sessions").insert({ ...sessionRow(), capabilities: ["discover", cap], host_id: hostA.id });
+      expect(r.error?.code).toBe("23514");
+      const u = await hostA.client.from("sessions").update({ capabilities: [cap] }).eq("id", sessionA);
+      expect(u.error?.code).toBe("23514");
+    }
+  });
+});
+
+describe("transcript storage gate (S2, D-004)", () => {
+  // The local stack is seeded with transcripts_enabled = true (supabase/seed.sql).
+  const msg = () => ({ host_id: hostA.id, session_id: sessionA, external_uuid: `gate-${randomUUID()}`, role: "assistant", text: "excerpt" });
+  const setEnabled = async (on: boolean) => {
+    const r = await adminClient(env).from("app_meta").update({ transcripts_enabled: on }).eq("id", true).select("transcripts_enabled");
+    if (r.error || r.data?.length !== 1) throw r.error ?? new Error("app_meta not updated");
+  };
+
+  it("is enabled on the seeded local stack", async () => {
+    const r = await anonClient(env).from("app_meta").select("transcripts_enabled").single();
+    expect(r.data?.transcripts_enabled).toBe(true);
+    expect((await hostA.client.from("session_messages").insert(msg())).error).toBeNull();
+  });
+
+  it("refuses a host's transcript insert while disabled", async () => {
+    await setEnabled(false);
+    try {
+      const m = msg();
+      expect((await hostA.client.from("session_messages").insert(m)).error?.code).toBe("42501");
+      expect((await ownerA.client.from("session_messages").select("id").eq("external_uuid", m.external_uuid)).data).toEqual([]);
+    } finally {
+      await setEnabled(true);
+    }
+    expect((await hostA.client.from("session_messages").insert(msg())).error).toBeNull();
+  });
+
+  it("can't be toggled by an owner, a host or anon", async () => {
+    for (const c of [ownerA.client, hostA.client, anonClient(env)]) {
+      const r = await c.from("app_meta").update({ transcripts_enabled: false }).eq("id", true).select("id");
+      expect(r.error ?? (r.data?.length === 0 ? null : "updated")).not.toBe("updated");
+    }
+    const r = await anonClient(env).from("app_meta").select("transcripts_enabled").single();
+    expect(r.data?.transcripts_enabled).toBe(true);
+  });
+});
+
 describe("realtime", () => {
+  // As the app subscribes (packages/api-client supabase-api.ts `subscribe`):
+  // a private channel on a `tavro-changes:` topic, INSERT/UPDATE only.
+  const join = (client: Host["client"], topic: string, onInsert: (externalId: string) => void = () => undefined) =>
+    new Promise<string>((resolve) => {
+      void client.realtime.setAuth();
+      client
+        .channel(topic, { config: { private: true } })
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "sessions" }, (p) => {
+          onInsert((p.new as { external_id?: string }).external_id ?? "");
+        })
+        .subscribe((status) => {
+          if (status === "SUBSCRIBED" || status === "CHANNEL_ERROR" || status === "TIMED_OUT") resolve(status);
+        });
+    });
+
+  it("lets owners, but not hosts, join the private changes channel", async () => {
+    expect(await join(ownerA.client, `tavro-changes:${randomUUID()}`)).toBe("SUBSCRIBED");
+    expect(await join(hostA.client, `tavro-changes:${randomUUID()}`)).toBe("CHANNEL_ERROR");
+    expect(await join(ownerA.client, `other-${randomUUID()}`)).toBe("CHANNEL_ERROR");
+    await ownerA.client.removeAllChannels();
+    await hostA.client.removeAllChannels();
+  });
+
   it("delivers changes only to the owning user", async () => {
     const received: Record<"a" | "b", string[]> = { a: [], b: [] };
-    const subscribe = (owner: Owner, key: "a" | "b") =>
-      new Promise<void>((resolve, reject) => {
-        void owner.client.realtime.setAuth();
-        owner.client
-          .channel(`rt-${key}-${randomUUID()}`)
-          .on("postgres_changes", { event: "*", schema: "public", table: "sessions" }, (p) => {
-            received[key].push((p.new as { external_id?: string }).external_id ?? "");
-          })
-          .subscribe((status) => {
-            if (status === "SUBSCRIBED") resolve();
-            if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") reject(new Error(status));
-          });
-      });
+    const subscribe = async (owner: Owner, key: "a" | "b") => {
+      const status = await join(owner.client, `tavro-changes:${key}-${randomUUID()}`, (ext) => received[key].push(ext));
+      if (status !== "SUBSCRIBED") throw new Error(status);
+    };
     await Promise.all([subscribe(ownerA, "a"), subscribe(ownerB, "b")]);
 
     const ext = `rt-${randomUUID()}`;

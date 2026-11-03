@@ -14,7 +14,7 @@
 
 | Principal | Credential | Can |
 |---|---|---|
-| Anonymous | Publishable key | Read `app_meta.schema_version` only |
+| Anonymous | Publishable key | Read `app_meta` only (`schema_version`, and `transcripts_enabled`, which reveals whether the project stores transcripts but no content) |
 | Owner | Supabase Auth user JWT | Read own hosts, sessions, events and messages. Rename or revoke own hosts. Manage own preferences. Create pairing codes. |
 | Host (connector) | Supabase Auth user created by `pair-host`, with `app_metadata` `{mc_role: "host", host_id}` | Write and read only its own host's sessions, events and messages. Heartbeat. |
 | Edge Function | Project secret key (server-side) | Redeem pairing codes and create host users |
@@ -24,7 +24,7 @@
 **Data isolation (RLS):**
 - Every table has RLS enabled.
 - All privileges are revoked from `anon` and `authenticated`, then granted back per table and per column.
-- Owner policies use `owner_uid()`, which is null for host principals.
+- Owner policies use `owner_uid()`, which is null for any token whose app_metadata has an `mc_role` key, including a host claim with a malformed `host_id` (it failed open before migration `20261105000001`).
 - Host policies use `active_host_id()`, which re-checks that the host isn't revoked, so revocation applies immediately even with a still-valid token.
 
 **Integrity:**
@@ -57,11 +57,17 @@
 - The connector has no command channel.
 - Replies, resume and approvals are disabled. Control capabilities need both a feature flag and an explicit org allowance, and an unknown policy counts as "not allowed".
 
-**Transcript content:** only written when `MC_SYNC_TRANSCRIPTS=true` **and** the backend URL is a loopback address. There's no override in this release.
+**Transcript content:** only written when `MC_SYNC_TRANSCRIPTS=true` **and** the backend URL is a loopback address. There's no override in this release. Since migration `20261105000001` the database enforces it too: hosts can insert `session_messages` only while `app_meta.transcripts_enabled` is true. It defaults to false, no API role can change it, and only the local stack's `supabase/seed.sql` turns it on. `supabase db push` (the hosted runbook) doesn't load the seed; `--include-seed`, `supabase db reset --linked` and Supabase Branching all would, so none is ever used on a hosted project (DEPLOYMENT.md step 3), and the hosted smoke test checks the flag is false (step 9b). `session_messages` is not in the Realtime publication. The connector treats a refused transcript insert (42501) as "storage is off" only after reading `transcripts_enabled = false`; the same code from the owner trigger or a revoked host's RLS stays an ordinary error.
+
+**Claude Code child process:** a bare `claude` is resolved on PATH by the connector, skipping relative entries (Windows would otherwise search the current directory first), and spawned by absolute path without a shell and with an allow-listed environment (no `MC_*`, `NODE_OPTIONS`, proxies or keys). An unrecognised CLI status is sent as fixed text, never quoted (docs/INTEGRATIONS.md).
 
 **Realtime:**
-- Clients use Postgres Changes, which respect RLS. Data is re-read through RLS-checked queries.
+- Clients use Postgres Changes, which respect RLS, for invalidation only. Payloads are ignored; data is re-read through RLS-checked queries.
+- The app joins a **private** channel, `tavro-changes:<random>`, so Realtime "Allow public access" stays off. It listens to INSERT and UPDATE on `sessions` and `session_events` only. Never DELETE, which Realtime doesn't filter by RLS; rows are never deleted anyway, and revocation is a flag. Never `hosts`: the 30 s heartbeat would wake every client, so the host list is polled and `hosts` is not in the publication.
+- `realtime.messages` has one policy, a SELECT for owners (`owner_uid()` not null) on `tavro-changes:*` topics. Hosts and anon can't join. There is no INSERT policy, so no client can broadcast or track presence on the topic. The topic is shared by name prefix and carries nothing beyond each subscriber's own RLS-filtered changes. Any future Broadcast use needs per-owner topics.
 - The JWT lifetime is 15 minutes, which bounds how long Realtime keeps a cached permission.
+
+**Capabilities (D-003):** the `sessions.capabilities` check accepts only `discover`, `get_details`, `read_messages` and `subscribe_events`. A stolen host credential therefore can't make the dashboard offer replies, resume or approvals. Re-widening it needs D-003 to change.
 
 **Errors:** the api-client maps database errors to generic messages, so no SQL text reaches the UI.
 
@@ -85,6 +91,19 @@
 - Test cases are in `supabase/tests/rls.test.ts` ("stale-write guard"), **written, not yet run** (Docker).
 - **SQL level (PGlite, `npm run test:sql`, 2026-11-03):** the stale skip (absent from RETURNING, row unchanged, per-row in a batch), equal-time and omitted-`observed_at` updates, null → 23502, the `now() + 5 min` clamp, the v3 key-column grants under a PostgREST-shaped upsert, the forged-move refusal, the cross-host freeze refusal and the `-infinity` backfill all behave as described, on the repository's migrations including the fix below. Still unverified via PostgREST and `test:db`.
 - **Defect found (2026-11-03, SQL level):** `set_owner_from_host` (v1) references `new.session_id` inside an `if … and not exists (…)` condition. PL/pgSQL resolves every field in an expression before evaluating it, so on `sessions`, which has no `session_id`, every insert fails with `42703 record "new" has no field "session_id"`. Hosts can't create sessions at all. **Fixed** by `supabase/migrations/20261104000001_fix_set_owner_from_host.sql`, which nests the session check in its own `if tg_table_name in (…)` block. Function body only, so the schema version stays 3 (D-021).
+
+**Security hardening (migration `20261105000001_security_hardening.sql`, 2026-11-03, D-022):**
+- Findings from the independent review, all reproduced at SQL level on migrations v1 to `20261104000001` before the fix:
+  - **S4:** a token with `mc_role: "host"` and `host_id: "not-a-uuid"` got `owner_uid()` equal to its `sub`, and could create pairings.
+  - **S3:** the capabilities check allowed `send_message`, `resume` and `approve_requests`.
+  - **S2:** `messages_host_insert` checked only the host.
+  - **M5:** `hosts` was published, the client subscribed to `*` (including DELETE) on a public channel, and `realtime.messages` had no policies.
+- **SQL level (PGlite, `npm run test:sql`):** each fix is covered. That covers the malformed-claim cases, any `mc_role` value, user_metadata ignored, and an upper-case host id still accepted. It also covers the control capabilities refused (23514), the transcript insert refused while disabled and allowed while enabled, and the flag not writable by owner, host or anon. Finally it covers the publication, the emulated private-channel decision (owners may receive, nobody may send, hosts, anon and other topics refused), the replaced helpers keeping their owner, invoker security and grants, and the upgrade path (stored control capabilities stripped, stored transcripts kept).
+- **Written, not yet run** (`rls.test.ts`, needs Docker): the same cases through GoTrue and PostgREST, plus a real private-channel join for owner, host and an unlisted topic.
+- **Unverified until `test:db` or a provisioned project:**
+  - Whether real Realtime admits a private channel used only for Postgres Changes with this policy. The SQL tests emulate its check, they don't run it.
+  - Whether `db reset` applies a policy on `realtime.messages` cleanly. The table is created by the Realtime service; if it doesn't exist yet the migration fails loudly rather than skipping.
+  - Whether `service_role` can update `app_meta` through PostgREST, which the rls tests use to switch the flag.
 
 ## Sign-in sessions on the device (2026-11-03)
 

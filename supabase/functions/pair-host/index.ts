@@ -5,7 +5,12 @@
 // publishable key (verify_jwt = false in config.toml), so the pairing code is
 // the credential. Codes are single-use, expire after 10 minutes, and only
 // their SHA-256 is stored.
-import { createClient } from "npm:@supabase/supabase-js@2";
+//
+// Pinned to the exact @supabase/supabase-js version in package-lock.json, so a
+// deploy never picks up a newer 2.x. Keep the two in step when upgrading. The
+// version pin doesn't cover transitive packages: see docs/DEPLOYMENT.md step 5
+// for generating a deno.lock.
+import { createClient } from "npm:@supabase/supabase-js@2.118.0";
 
 // Mirrors PairingTicket.code in packages/contracts/src/host.ts.
 const CODE_RE = /^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/;

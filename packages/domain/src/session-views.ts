@@ -6,11 +6,14 @@ import type { DisplayStatus } from "./status.js";
 
 /** Shown for a session whose host is no longer in the host list. */
 export const UNKNOWN_HOST_NAME = "Unknown host";
+/** Shown for every session while the host list couldn't be loaded. */
+export const HOST_NOT_LOADED_NAME = "Host not loaded";
 
 export interface SessionView extends SessionRow {
   displayStatus: DisplayStatus;
   hostName: string;
-  hostConnectivity: HostConnectivity;
+  /** null while the host list couldn't be loaded: nothing is known about the host. */
+  hostConnectivity: HostConnectivity | null;
   /** When this session's source was last read successfully; separate from last activity. */
   freshness: Freshness;
 }
@@ -27,11 +30,27 @@ export interface ClientState {
  * Connectivity is judged when the host list was fetched while the client isn't
  * current, so a phone that can't refresh doesn't report healthy hosts as
  * offline; freshness is then capped at the session list's own fetch.
+ *
+ * `hosts` null means the host list couldn't be loaded (spec 3.5 partial data).
+ * Each session then shows its last reported status, stale for
+ * "hosts_unavailable": without its host there is no basis for calling it
+ * disconnected or its source unavailable, nor for trusting it as current.
  */
-export function buildSessionViews(sessions: readonly SessionRow[], hosts: readonly HostRow[], now: Date, client: ClientState): SessionView[] {
+export function buildSessionViews(sessions: readonly SessionRow[], hosts: readonly HostRow[] | null, now: Date, client: ClientState): SessionView[] {
+  const read = { sync: client.sync, fetchedAt: client.sessionsFetchedAt };
+  if (hosts === null) {
+    return sessions
+      .map((s) => ({
+        ...s,
+        displayStatus: s.status,
+        hostName: HOST_NOT_LOADED_NAME,
+        hostConnectivity: null,
+        freshness: withClientRead({ ...sessionFreshness(s, undefined, now), reason: "hosts_unavailable" }, read, now),
+      }))
+      .sort(compareByAttention);
+  }
   const byId = new Map(hosts.map((h) => [h.id, h]));
   const judgedAt = connectivityJudgedAt(client.sync, client.hostsFetchedAt, now);
-  const read = { sync: client.sync, fetchedAt: client.sessionsFetchedAt };
   return sessions
     .map((s) => {
       const host = byId.get(s.host_id);
@@ -59,8 +78,10 @@ export function buildHostView(host: HostRow, now: Date, client: { sync: ClientSy
 }
 
 /** Why a "disconnected" session's host can't be trusted; never claims more than is known. */
-export function untrustedHostReason(connectivity: HostConnectivity, hostName: string): string {
+export function untrustedHostReason(connectivity: HostConnectivity | null, hostName: string): string {
   switch (connectivity) {
+    case null:
+      return "This session's host couldn't be loaded";
     case "revoked":
       return `${hostName} was revoked and no longer reports`;
     case "never_connected":

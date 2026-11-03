@@ -21,6 +21,7 @@ import {
   DISCONNECT_AFTER_MS,
   SEARCH_QUERY_MAX_LENGTH,
   SESSION_SORTS,
+  UNRECOGNISED_STATUS_REASON,
   type SessionSort,
   type SortableSession,
 } from "../src/index.js";
@@ -36,8 +37,10 @@ describe("mapClaudeAgentsStatus", () => {
   it("never guesses on unrecognised values", () => {
     const r = mapClaudeAgentsStatus("something-new");
     expect(r.status).toBe("unknown");
-    expect(r.reason).toContain("something-new");
-    expect(mapClaudeAgentsStatus(undefined).status).toBe("unknown");
+    // Fixed text: the raw value never reaches status_reason, which syncs to the cloud.
+    expect(r.reason).toBe(UNRECOGNISED_STATUS_REASON);
+    expect(r.reason).not.toContain("something-new");
+    expect(mapClaudeAgentsStatus(undefined)).toEqual({ status: "unknown", reason: UNRECOGNISED_STATUS_REASON });
   });
 });
 
@@ -77,9 +80,9 @@ describe("effectiveCapabilities", () => {
     expect(effectiveCapabilities("claude-web", policy)).toEqual([]);
     expect(effectiveCapabilities("cowork", policy)).toEqual([]);
   });
-  it("keeps read capabilities for Claude Code", () => {
+  it("claims for Claude Code only what its provider implements", () => {
     const caps = effectiveCapabilities("claude-code", { remoteControlAllowed: false, repliesEnabled: false });
-    expect(caps).toEqual(expect.arrayContaining(["discover", "read_messages"]));
+    expect([...caps].sort()).toEqual(["discover", "get_details"]);
   });
 });
 

@@ -8,6 +8,9 @@ export default defineConfig({
           name: "unit",
           include: ["packages/*/test/**/*.test.ts", "apps/connector/test/**/*.test.ts", "apps/web/src/**/*.test.ts", "scripts/**/*.test.mjs"],
           environment: "node",
+          // Some tests spawn real child processes (claude-code-process); give them
+          // room when the machine is busy. Assertions are unchanged.
+          testTimeout: 10_000,
         },
       },
       {
@@ -18,6 +21,11 @@ export default defineConfig({
           include: ["apps/web/src/**/*.dom.test.tsx"],
           environment: "jsdom",
           setupFiles: ["apps/web/src/test-setup.ts"],
+          // Full-app renders with fake timers take 2-5 s on an idle laptop and
+          // timed out at the 5 s default under CPU contention (2026-11-03). This
+          // is a hang ceiling, not a speed target: waitFor deadlines and every
+          // assertion are unchanged, so a broken test still fails.
+          testTimeout: 15_000,
         },
       },
       {
@@ -28,7 +36,8 @@ export default defineConfig({
           name: "sql",
           include: ["supabase/sql-tests/**/*.test.ts"],
           environment: "node",
-          testTimeout: 30_000,
+          // PGlite boots Postgres in WASM; one test took 32 s under load.
+          testTimeout: 60_000,
           hookTimeout: 60_000,
         },
       },

@@ -2,16 +2,34 @@
 
 Continuity between sessions. Update it at the end of every cycle. Requirements are in `PRODUCT_SPEC.md`, statuses in `GAP_ANALYSIS.md`, and the plan in `ROADMAP.md` (D-016).
 
-**Last updated:** 2026-11-03, end of the fourth cycle.
+**Last updated:** 2026-11-03, end of the fifth cycle.
 
 ## Where things stand
 
 - **Branch:** `main`. The local commits are ahead of `origin/main` (public). They are **not pushed**, because a push needs founder authorization (D-017).
 - **Schema:** v3. Clients require exactly v3. The latest migration, `20261104000001_fix_set_owner_from_host.sql`, changes a function body only and leaves the version at 3.
 - **Gates at the last commit:**
-  - `npm run check` passes: typecheck, lint and 534 tests, of which 50 are SQL-level tests in PGlite.
-  - `npm run check:release` passes: 223.7 kB gzip against a 270 kB budget.
+  - `npm run check:release` passes: typecheck, lint, 835 tests (71 of them SQL-level in PGlite), build, and 227.6 kB gzip against a 270 kB budget.
+  - **When the laptop is busy** with the user's other projects (Angular dev servers and test runs), leave those processes alone. The per-test ceilings in `vitest.config.ts` absorb the load.
   - `test:db` and `test:e2e` have never run. The PGlite layer is **not** `test:db` (D-021).
+
+## Fifth cycle (2026-11-03): what was done
+
+- **Team:**
+  - Three engineers implemented in parallel, each owning its own files: partial data, sleep/resume, and the Claude Code provider.
+  - Three ran read-only reviews: a full spec audit, a critical phone-access security review, and a mobile UX review.
+  - Two more then fixed what the reviews found: deployment and runbook, and database and Realtime.
+  - QA and security then reviewed the integrated tree; two engineers fixed their findings.
+  - The main session made the mobile CSS and copy fixes, the pill, capability honesty, connector wiring, transcript-refusal handling, test ceilings and all docs.
+- **Delivered:** see ROADMAP "Done 2026-11-03 (fifth cycle)". Decisions D-022 to D-025.
+- **Migrations:**
+  - `20261105000001_security_hardening.sql` is new. It is SQL-level tested, **not** run on a real stack.
+  - The schema version stays 3.
+- **Open after review (G32):**
+  - QA LOW-3 and LOW-4 from cycle 4;
+  - backlog items L2, L3, I1 and I3;
+  - the copy of `isKeyRejection` in the connector;
+  - `liveUpdates` tracks only the newest subscription.
 
 ## Fourth cycle (2026-11-03): what was done
 
@@ -73,10 +91,9 @@ Continuity between sessions. Update it at the end of every cycle. Requirements a
 
 ## Next actions (in order)
 
-1. **G13:** present partial data when one query fails, and add a sleep/resume test.
-2. **Full spec re-audit**, then the highest-value gaps it finds.
-3. **QA LOW-3 and LOW-4** (see above).
-4. When authorized: follow `docs/DB_TESTING.md`, then `docs/DEPLOYMENT.md`.
+1. **G22–G32** in the order given in ROADMAP "Next cycle".
+2. **When authorized:** follow `docs/DB_TESTING.md`, then `docs/DEPLOYMENT.md`. Both start with gates that can't be skipped.
+3. **Before the real adapter:** run the checklist in `docs/INTEGRATIONS.md`, then founder approval.
 
 Also done late in this cycle: G13 request timeout, G14 unread alerts on the dashboard, G15 search, G17 bundle budget and `check:dist`, G19 `_headers` template and deployment runbook.
 
