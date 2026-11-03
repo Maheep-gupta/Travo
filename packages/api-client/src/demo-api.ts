@@ -1,4 +1,4 @@
-import { DEFAULT_NOTIFICATION_PREFS, MAX_SCHEMA_VERSION } from "@mc/contracts/constants";
+import { DEFAULT_NOTIFICATION_PREFS, MAX_SCHEMA_VERSION, SESSION_LIST_LIMIT } from "@mc/contracts/constants";
 import type {
   HostRow,
   NotificationPrefs,
@@ -10,6 +10,7 @@ import type {
 import { DemoSimulator } from "@mc/demo";
 import { PROVIDERS, diffObservations } from "@mc/domain";
 import { ApiError, type AuthUser, type ChangeTopic, type TavroApi } from "./api.js";
+import { createSessionListStore } from "./session-list-store.js";
 
 export interface DemoApiOptions {
   /** Simulation step in ms (default 4000). */
@@ -219,8 +220,12 @@ export function createDemoApi(opts: DemoApiOptions = {}): TavroApi {
     if (tickMs === 0) sync();
   };
 
+  // One fixed user, so only signing out (or leaving) can make the gaps another user's.
+  const sessionList = createSessionListStore();
+
   return {
     kind: "demo",
+    sessionList: { gaps: sessionList.gaps, onChange: sessionList.onChange },
     async getSchemaVersion() {
       return MAX_SCHEMA_VERSION;
     },
@@ -232,18 +237,26 @@ export function createDemoApi(opts: DemoApiOptions = {}): TavroApi {
     },
     async signOut() {
       signedIn = false;
+      sessionList.reset();
       // Nothing lives on a server, so nothing is left to revoke.
       return { serverRevoked: true };
     },
     async close() {
       signedIn = false;
+      sessionList.reset();
     },
     onAuthChange() {
       return () => undefined;
     },
     async listSessions() {
       requireUser();
-      return [...sessions.values()];
+      // The Supabase backend's rule: most recent activity first (none yet last), then id, capped at the limit.
+      const token = sessionList.begin();
+      const all = [...sessions.values()].sort(
+        (a, b) => (b.last_activity_at ?? "").localeCompare(a.last_activity_at ?? "") || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      );
+      sessionList.report(token, { truncated: all.length > SESSION_LIST_LIMIT, dropped: 0 });
+      return all.slice(0, SESSION_LIST_LIMIT);
     },
     async getSession(id) {
       requireUser();

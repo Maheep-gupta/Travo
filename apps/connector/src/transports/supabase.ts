@@ -1,5 +1,6 @@
 import { createClient, isAuthApiError, type SupabaseClient } from "@supabase/supabase-js";
 import { SessionUpsert, type HeartbeatInput, type ProviderId } from "@mc/contracts";
+import { isKeyRejection } from "@mc/domain";
 import type { EventInput, KnownSession, MessageInput, Transport } from "../types.js";
 import type { HostCredentials } from "../credentials.js";
 import { HostAuthError, TranscriptsRefusedError } from "./errors.js";
@@ -7,16 +8,10 @@ import { HostAuthError, TranscriptsRefusedError } from "./errors.js";
 /** Auth statuses that mean "this login is refused", not "try again shortly". */
 const REJECTED_SIGN_IN: ReadonlySet<number> = new Set([400, 401, 403]);
 
-/**
- * The API gateway refusing the `apikey` (rotated, revoked or mistyped
- * publishable key), not the host's login: a 401 whose message or hint names
- * an API key. The same rule as isKeyRejection in packages/api-client. Only
- * matched, never logged.
- */
-function isKeyRejection(status: number | undefined, message: string | undefined, hint?: string | null): boolean {
-  return status === 401 && /\bapi key\b/i.test(`${message ?? ""} ${hint ?? ""}`);
-}
-
+// A rejected publishable key (rotated, revoked or mistyped) is told apart from
+// a refused host login by isKeyRejection, the rule the clients use. The
+// heartbeat passes PostgREST's error code too, so an expired host token
+// (PGRST30x) whose text mentions "API key" isn't mistaken for a bad key. Only matched, never logged.
 const KEY_REJECTED = "the project rejected the publishable key (401)";
 
 /**
@@ -54,7 +49,7 @@ export class SupabaseTransport implements Transport {
       this.signedIn = false;
       // Auth answered and refused the login (wrong or deleted credentials, banned
       // user). Network failures, rate limits and 5xx are retryable and stay "offline".
-      if (isAuthApiError(error) && isKeyRejection(error.status, error.message)) {
+      if (isAuthApiError(error) && isKeyRejection({ message: error.message }, error.status)) {
         throw new HostAuthError(KEY_REJECTED, "check_publishable_key");
       }
       if (isAuthApiError(error) && REJECTED_SIGN_IN.has(error.status)) {
@@ -76,7 +71,7 @@ export class SupabaseTransport implements Transport {
     });
     if (error) {
       // A key rotated while this connector was signed in.
-      if (isKeyRejection(status, error.message, error.hint)) throw new HostAuthError(KEY_REJECTED, "check_publishable_key");
+      if (isKeyRejection({ message: error.message, hint: error.hint, code: error.code }, status)) throw new HostAuthError(KEY_REJECTED, "check_publishable_key");
       // host_heartbeat raises 42501 when the caller is not an active host: a
       // revoked host keeps a working login, so this is where revocation shows.
       if (error.code === "42501") {

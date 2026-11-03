@@ -20,7 +20,7 @@ import { useApi } from "./api-context.js";
 import { AlertStore, alertStorageKey } from "./alert-store.js";
 import { UserIdContext, userKey } from "./hooks.js";
 import { webStorage } from "./platform.js";
-import { closeSystemNotifications, loadNotificationNamesEnabled, loadSystemNotificationsEnabled, showSystemNotification, showSystemSummary } from "./system-notifications.js";
+import { closeSystemNotifications, closeSystemSingles, loadNotificationNamesEnabled, loadSystemNotificationsEnabled, showSystemNotification, showSystemSummary } from "./system-notifications.js";
 
 const AlertStoreContext = createContext<AlertStore | null>(null);
 
@@ -114,19 +114,33 @@ function AlertWatcher({ store, userId }: { store: AlertStore; userId: string }) 
   const prefs = useQuery({ queryKey: userKey(api, userId, "prefs"), queryFn: () => api.getNotificationPrefs() });
   const snapshot = useRef<AlertSnapshot | null>(null);
   const [announcement, setAnnouncement] = useState("");
-  // Alerts notified recently, so a burst becomes one summary (spec 16: no notification storms).
+  // Alerts notified recently, so a burst becomes one summary (spec 16: no
+  // notification storms). The user's tabs share it through storage, so two
+  // hidden tabs make one sound per storm; this copy is the fallback when
+  // storage can't be used.
   const burst = useRef<NotificationBurst | null>(null);
 
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== "visible") return;
       closeSystemNotifications();
-      // The user has seen the app; the next alert is news again.
+      // The user has seen the app; the next alert is news again, in every tab.
       burst.current = null;
+      store.saveBurst(null);
     };
     document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, []);
+    // Opening or reloading Tavro in view is looking at it too; no visibilitychange comes for that.
+    onVisible();
+    // Another tab's change: the user looked there (ended), or its summary now counts this tab's singles.
+    const unwatch = store.watchBurst(window, (shared) => {
+      if (shared === null) closeSystemNotifications();
+      else if (shared.summary.total > 1) closeSystemSingles();
+    });
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      unwatch();
+    };
+  }, [store]);
 
   useEffect(() => {
     if (!sessions.data || !hosts.data || sessions.error || hosts.error || prefs.isLoading || prefs.error) return;
@@ -154,11 +168,13 @@ function AlertWatcher({ store, userId }: { store: AlertStore; userId: string }) 
       const first = added[0];
       if (first) setAnnouncement(added.length === 1 ? `New alert: ${ALERT_LABEL[first.kind]}` : `${added.length} new alerts`);
     } else if (loadSystemNotificationsEnabled(webStorage)) {
-      const { plan, burst: next } = planNotifications(burst.current, added, Date.now());
-      burst.current = next;
+      const now = Date.now();
+      const shared = store.loadBurst(now);
+      const { plan, burst: next } = planNotifications(shared === undefined ? burst.current : shared, added, now);
+      let shown = false;
       if (plan?.kind === "summary") {
         // The list is where a burst makes sense; opening it marks nothing read.
-        showSystemSummary(
+        shown = showSystemSummary(
           plan.summary,
           () => {
             window.focus();
@@ -172,7 +188,7 @@ function AlertWatcher({ store, userId }: { store: AlertStore; userId: string }) 
         const withNames = loadNotificationNamesEnabled(webStorage, store.key);
         const s = a.sessionId ? sessions.data.find((x) => x.id === a.sessionId) : undefined;
         const names = withNames ? { session: s ? notificationName(s.title) ?? s.project_label : null, host: hosts.data.find((h) => h.id === a.hostId)?.name ?? null } : undefined;
-        showSystemNotification(
+        shown = showSystemNotification(
           a,
           () => {
             window.focus();
@@ -182,6 +198,13 @@ function AlertWatcher({ store, userId }: { store: AlertStore; userId: string }) 
           undefined,
           names,
         );
+      }
+      // Only what was actually shown joins the burst. Other tabs react to the
+      // shared copy by closing their own notifications, so recording one the
+      // browser refused would remove theirs with nothing in its place.
+      if (shown) {
+        burst.current = next;
+        store.saveBurst(next);
       }
     }
   }, [api.kind, userId, sessions.data, sessions.error, hosts.data, hosts.dataUpdatedAt, hosts.error, prefs.data, prefs.isLoading, prefs.error, store, navigate]);

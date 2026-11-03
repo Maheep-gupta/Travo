@@ -82,7 +82,7 @@
   --light-text-2: #3b3f3a;
   --light-muted: #555b53;
   --light-faint: #646961;
-  --light-accent: #ae4924;
+  --light-accent: #ac4823; /* >= 4.5:1 for the unread tag on a hovered failed card (contrast.test.ts) */
   --light-accent-hover: #a04626;
   --light-accent-ink: #fffaf5;
   --light-accent-soft: rgba(184, 83, 46, 0.1);
@@ -656,6 +656,8 @@ a.env-pill:hover { background: var(--surface-2); }
 .related-alerts li:not(.unread) .ra-kind { font-weight: 500; color: var(--text-2); }
 .related-alerts .ra-unread { font-size: 0.76rem; font-weight: 600; color: var(--accent); }
 .related-alerts time { margin-left: auto; font: 500 0.78rem var(--mono); color: var(--faint); white-space: nowrap; }
+.related-alerts .ra-actions { display: inline-flex; align-items: center; gap: 2px; }
+.card-title .ra-mark-all { margin-left: auto; } /* Sits with "All alerts" on the right. */
 .related-empty { display: flex; align-items: center; gap: var(--sp-2); margin: 0; }
 .related-empty svg { width: 16px; height: 16px; flex: none; }
 .session-filters { list-style: none; margin: var(--sp-3) 0 0; padding: var(--sp-3) 0 0; border-top: 1px solid var(--line); display: grid; gap: var(--sp-2); font-size: 0.9rem; }

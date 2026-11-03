@@ -84,6 +84,7 @@ class FakeApi implements TavroApi {
   schemaError: Error | null = null;
   /** When set, getUser answers only once this settles (a slow stored-session read). */
   slowGetUser: Promise<AuthUser | null> | null = null;
+  getUserCalls = 0;
   /** When set, A's session list is answered only once this settles (a slow request in flight). */
   holdA: Promise<void> | null = null;
   readonly prefsCalls = new Map<string, number>();
@@ -114,7 +115,12 @@ class FakeApi implements TavroApi {
     return this.schemaError ? Promise.reject(this.schemaError) : Promise.resolve(MAX_SCHEMA_VERSION);
   }
   getUser(): Promise<AuthUser | null> {
+    this.getUserCalls += 1;
     return this.slowGetUser ?? Promise.resolve(this.user);
+  }
+  /** Whether anything (the auth gate) is listening for auth events. */
+  get listening(): boolean {
+    return this.authListeners.size > 0;
   }
   signIn(email: string): Promise<void> {
     const user = [A, B].find((u) => u.email === email);
@@ -366,11 +372,22 @@ describe("sign out, then sign in again", () => {
 });
 
 describe("races with auth events", () => {
+  /**
+   * The race needs getUser in flight and the gate listening. "Connecting…"
+   * alone doesn't show that: findBy* leaves the commit's effects (where the
+   * gate calls getUser and subscribes) to React's scheduler, so an event
+   * fired straight after it could reach no listener.
+   */
+  async function gateWaitingForGetUser(): Promise<void> {
+    await waitFor(() => expect([api.getUserCalls, api.listening]).toEqual([1, true]));
+  }
+
   it("a slow getUser for A that answers after a sign-out does not sign A back in", async () => {
     const slow = deferred<AuthUser | null>();
     api.slowGetUser = slow.promise;
     renderApp();
     expect(await screen.findByText("Connecting…", undefined, { timeout: 5000 })).toBeTruthy();
+    await gateWaitingForGetUser();
 
     act(() => api.switchTo(null));
     await onSignInPage();
@@ -388,6 +405,7 @@ describe("races with auth events", () => {
     api.slowGetUser = slow.promise;
     renderApp();
     expect(await screen.findByText("Connecting…", undefined, { timeout: 5000 })).toBeTruthy();
+    await gateWaitingForGetUser();
 
     act(() => api.switchTo(B));
     await signedInAs(B_TITLE);

@@ -17,3 +17,10 @@ describe("ErrorState", () => {
     expect(text).toContain("Something went wrong");
   });
 });
+
+describe("ErrorState for a paused project", () => {
+  it("gives the full message where no banner is saying it (sign-in, setup)", () => {
+    render(<ErrorState error={new ApiError("Your Supabase project is paused. Restore it from the project's page.", "paused")} />);
+    expect(screen.getByRole("alert").textContent).toContain("Restore it from the project's page");
+  });
+});

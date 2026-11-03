@@ -15,7 +15,7 @@ import {
   type PairingStatus,
 } from "@mc/domain";
 import { useApi } from "../api-context.js";
-import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, MissingDataNotice, Notice, RefreshFailedNotice, PageHeader, SessionListSkeleton } from "../components.js";
+import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, MissingDataNotice, Notice, RefreshFailedNotice, PageHeader, SessionListSkeleton, TruncatedNotice } from "../components.js";
 import { useConnection, useHosts, useNow, useSessionViews, userKey, useUserId } from "../hooks.js";
 import { IconAlert, IconCheck, IconClock, IconCopy, IconHost } from "../icons.js";
 import { FreshnessNote } from "./DashboardPage.js";
@@ -91,6 +91,8 @@ export function HostsPage() {
               <p>Each host's session count appears once the session list loads.</p>
             </MissingDataNotice>
           )}
+          {/* Each card's session count comes from that list, so it is incomplete too. */}
+          <TruncatedNotice truncated={sessions.truncated} dropped={sessions.dropped} />
           <div className="section-head">
             <h2 id="h-hosts">Paired hosts</h2>
             <span className="count">

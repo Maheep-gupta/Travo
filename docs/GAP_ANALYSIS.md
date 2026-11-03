@@ -1,9 +1,9 @@
 # Tavro gap analysis (requirements traceability matrix)
 
 **Requirements source:** `docs/PRODUCT_SPEC.md` v1.0. Requirement IDs are the spec section numbers (D-016).
-**Last updated:** 2026-11-03, fifth cycle. This version includes a full spec audit by the product-manager role, which corrected several earlier claims, marked ✱.
+**Last updated:** 2026-11-03, sixth cycle. This version includes a full spec audit by the product-manager role, which corrected several earlier claims, marked ✱.
 **Owner:** product-manager role; statuses are updated by the main session after integrating each cycle.
-**Test baseline:** `npm run check:release` passes. That covers typecheck, lint, the build, bundle budgets and 835 tests:
+**Test baseline:** `npm run check:release` passes. That covers typecheck, lint, the build, bundle budgets and 930 tests:
 - unit;
 - component (jsdom, with axe but no colour contrast);
 - 71 SQL-level tests in PGlite (D-021), which are **not** `test:db`.
@@ -36,7 +36,7 @@
 |---|---|---|---|
 | 3.1 | Counts per state and total; no misleading aggregates | Unit-test verified | ✱ Fixed this cycle (D-023): `dashboard-headline.test.ts`; `partial-data.dom.test.tsx` headline cases (current, offline, stale over 90 s, all hosts offline); "Counts as of HH:MM"; "Nothing confirmed needs you — N sessions can't be confirmed" when sessions sit on untrusted hosts. The state chips show 0 for Disconnected and Source not responding while hosts are missing, explained by the notice but not marked on the chips (**G22**). |
 | 3.2 | Card fields, freshness, no paths | Unit-test verified | `DashboardPage.dom.test.tsx`, `freshness.test.ts`, `claude-code.test.ts` |
-| 3.3 | Filters and search in the URL | Unit-test verified | `view-model.test.ts`, `DashboardPage.dom.test.tsx`. ✱ The session page's "Sessions" link drops the active filters (**G23**). |
+| 3.3 | Filters and search in the URL; Back from a session keeps them | Unit-test verified | `view-model.test.ts`, `DashboardPage.dom.test.tsx`, `dashboard.test.ts` `dashboardReturnPath` (only `/` plus a search; forged states rejected). Real-browser history: Blocked. |
 | 3.4 | Sorting | Unit-test verified | `dashboard.test.ts`, `domain.test.ts` |
 | 3.5 | First-time empty; no hosts vs no sessions | Unit-test verified | ✱ These were not distinct before this cycle. `partial-data.dom.test.tsx` covers both empty states. |
 | 3.5 | Loading; recoverable and complete error | Unit-test verified | `partial-data.dom.test.tsx` Dashboard loading/failed; page dom tests |
@@ -55,17 +55,17 @@
 | 4.3 | Session detail, source health, last update, related alerts | Unit-test verified | `SessionPage.dom.test.tsx`, `partial-data.dom.test.tsx` |
 | 4.3 | Transcript excerpts (spec) vs D-004 | Needs founder decision | The database now refuses transcripts unless enabled locally (D-022) |
 | 4.4 | No remote commands; read-only capabilities enforced by the database | Integration-test verified (SQL level) | D-022. `connector.test.ts` "never grants control capabilities"; `migrations.test.ts` capabilities check |
-| 4.4 | Dismiss and read a session's alerts from its page | Not started | ✱ **G25** |
+| 4.4 | Dismiss and read a session's alerts from its page | Unit-test verified | `SessionPage.dom.test.tsx`. Opening a session marks nothing read; only explicit actions do. |
 
 ### Alerts and notifications (Part 5)
 | ID | Requirement | Status | Evidence / remaining |
 |---|---|---|---|
 | 5.1/5.3/5.4 | Alerts from genuine changes; identity, dedupe, cap, tabs, account isolation | Unit-test verified | `alerts.test.ts`, `alerts.dom.test.tsx`, `auth.dom.test.tsx`. Real tabs: Blocked (browser). |
 | 5.2 | Categories | Implemented (partial) | ✱ There is no "important connector error" category. With the real CLI only Waiting/Working are observable: Needs approval, Completed and Failed need Claude Code hooks (founder decision 7). |
-| 5.5 | Notification centre | Unit-test verified | `alerts.dom.test.tsx`. ✱ While names are loading, rows say "no longer listed" (**G26**). |
+| 5.5 | Notification centre: names, focus, announcements | Unit-test verified | `alerts.dom.test.tsx` ("names while lists load or fail", "focus and announcements"), `a11y-more.dom.test.tsx` |
 | 5.6 | System notifications: foreground, opt-in, generic, honest about phones | Unit-test verified (synthetic) | `SettingsPage.dom.test.tsx`, `alerts.test.ts`. The copy now says phones may not show them without a service worker. Real browsers and devices: Blocked. |
 | 5.6 | Session names in notifications (D-013) | Needs founder decision | Built and inactive |
-| 5.7 / 16 | Bursts; no storms | Unit-test verified | D-018. `alert-bursts.test.ts`, `alerts.dom.test.tsx` |
+| 5.7 / 16 | Bursts; no storms, also across tabs | Unit-test verified | D-018. `alert-bursts.test.ts`, `alerts.test.ts`, `alerts.dom.test.tsx`. Tag replacement across tabs in real browsers: Blocked. |
 | 5.7 | Push, quiet hours | Blocked (M6, cloud and IT approval) | `PHONE_ACCESS.md` §3 |
 
 ### Hosts (Part 6)
@@ -92,7 +92,7 @@
 | 9.1/9.3 | Sign-in lifecycle, rejected key, races, tabs, per-project session storage | Integration-test verified | D-020. `auth.dom.test.tsx`, `backend-switch.test.ts` (real supabase-js), `auth-errors.test.ts`, `auth-signout.test.ts`. Real multi-tab: Blocked. |
 | 9.2 | Isolation, client side | Unit-test verified | `auth.dom.test.tsx`, `alerts.dom.test.tsx` owner guard |
 | 9.2 | Isolation, server side (RLS, forged identity, `owner_uid` fails closed) | Integration-test verified (SQL level); Database verified: Blocked | D-021, D-022. `migrations.test.ts`, `upgrade.test.ts` |
-| 10.2 | Persist only what's needed; transcripts off in the cloud | Integration-test verified (SQL level) | D-022 `transcripts_enabled`. ✱ No retention: events grow without limit (a manual purge is in `DEPLOYMENT.md` Operations), and `listSessions` silently caps at 500 (**G28**). |
+| 10.2 | Persist only what's needed; transcripts off in the cloud; honest list cap | Integration-test verified | D-022. `session-list.test.ts` (real supabase-js: 501 rows give "500 most recent"; a malformed row is dropped and counted, never logged), `session-list-gaps.dom.test.tsx`. Retention is a manual purge only (`DEPLOYMENT.md` Operations). |
 | 10.3 | Sync: newer wins, dedupe, Realtime as invalidation only | Integration-test verified (SQL level + api-client) | `realtime-subscribe.test.ts` (INSERT/UPDATE only, private channel, join status). Settings → Application shows "Live updates: On / Unavailable (using 30 s refresh)". Real Realtime authorization: unverified. |
 | 10.4 | Pre-production database review | Blocked (Docker) | 70 PGlite tests; `rls.test.ts` (31+ cases) never run. Options in `docs/DB_TESTING.md`. |
 | 15.1/15.2 | Least privilege, no secrets, safe errors, CSP possible | Unit-test verified | `check-dist` secret rules, `edge-function-pins.test.mjs`, `generate-headers.test.mjs`, `errors.test.ts` |
@@ -107,7 +107,7 @@
 | 11.3 | Never claim pairing succeeded; invalid config; schema mismatch | Unit-test verified | `pairing.test.ts`, `HostsPage.dom.test.tsx`, `form-errors.test.ts` |
 | 12 | Settings: every control real | Unit-test verified | `SettingsPage.dom.test.tsx`. ✱ No diagnostics section (**G27**). |
 | 13.1/13.2 | Design, responsive, mobile | Implemented (code review) | Mobile review on 2026-11-03: 4 High and 10 Medium findings. The self-contained ones are fixed (`mobile.css`, `route-focus.ts`, the copy). Remaining: **G30**. Browser and device: Blocked. |
-| 13.3 | Accessibility | Unit-test verified (jsdom axe, no contrast) | `a11y.dom.test.tsx`, `partial-data.dom.test.tsx`. ✱ No axe on AlertsPage or HostPage, and no contrast check (**G31**). |
+| 13.3 | Accessibility | Unit-test verified (jsdom axe; token contrast computed) | `a11y.dom.test.tsx`, `a11y-more.dom.test.tsx` (Alerts and Host pages), `contrast.test.ts` (391 pairs, both themes). Control borders (`--line-strong`) are below 3:1, recorded as `REPORTED_BOUNDARIES` (**G33**, design decision). Screen readers, focus order, blurred bars: Blocked (browser). |
 | 14.1 | Manifest, install guidance | Unit-test verified (static) | `check-dist` manifest checks. Installability: Blocked. |
 | 14.2 | Offline behaviour; cached states never shown as live | Integration-test verified | D-019, D-023. `partial-data.dom.test.tsx` page + banner. No offline shell on a cold launch (no service worker, D-011). |
 | 14.3 | Device testing | Blocked | — |
@@ -133,7 +133,7 @@
 ### Performance (Part 17)
 | ID | Requirement | Status | Evidence / remaining |
 |---|---|---|---|
-| 17 | Lazy routes; bundle budget | Unit-test verified (release gate) | `check:dist`: 227.6 kB gzip in total against a 270 kB budget (2026-11-03). Real-network load: unmeasured. |
+| 17 | Lazy routes; bundle budget | Unit-test verified (release gate) | `check:dist`: 231.5 kB gzip in total against a 270 kB budget (2026-11-03). Real-network load: unmeasured. |
 
 ### Release (Parts 19–21)
 | ID | Requirement | Status | Evidence / remaining |
@@ -147,17 +147,18 @@ Done: G1–G21. G13 finished 2026-11-03 (partial data D-023, sleep/resume D-024)
 
 | # | Gap | Size | Notes |
 |---|---|---|---|
-| G22 | Mark the Disconnected and Source chips as unknown while hosts are missing | S | Spec 3.1 |
-| G23 | Keep dashboard filters when going back from a session | S | Spec 3.3; mobile review M1 |
+| G22 | Mark the Disconnected and Source chips as unknown while hosts are missing | S | **Done 2026-11-03** |
+| G23 | Keep dashboard filters when going back from a session | S | **Done 2026-11-03** |
 | G24 | Explicit transition model | M | Spec 4.2; lower value |
-| G25 | Mark read and dismiss a session's alerts from its page | S | Spec 4.4, 21.7 |
-| G26 | Name resolution states on the Alerts page | S | Spec 5.5 |
+| G25 | Mark read and dismiss a session's alerts from its page | S | **Done 2026-11-03** |
+| G26 | Name resolution states on the Alerts page | S | **Done 2026-11-03**, with focus and announcements |
 | G27 | Diagnostics: provider failure categories reach the UI; Settings diagnostics with "copy report" | M | Spec 2 area 10, 7.4, 12. Categories need a DB contract change (a schema bump), so design carefully. |
-| G28 | List truncation honesty (500 cap); one malformed row shouldn't fail the list; retention | M | Spec 10.2, 16 |
+| G28 | List truncation honesty; malformed rows; retention | M | **Done 2026-11-03** except retention (a manual purge). Hosts still fail whole on a bad row, on purpose: a dropped host would show its sessions as disconnected. |
 | G29 | Guided setup checklist | M | Spec 11.2 |
 | G30 | Remaining mobile review items: H4b filter disclosure, M2 timeline length, M9/M10 iOS status bar and sticky banner (device check), Low 1/2/8/9/12 | S–M | Spec 13 |
-| G31 | Axe on AlertsPage and HostPage; token contrast test | S | Spec 13.3 |
-| G32 | QA LOW-3/LOW-4 (bursts across tabs; duplicate paused message); re-check backlog L2/L3/I1/I3 | S | — |
+| G31 | Axe on AlertsPage and HostPage; token contrast test | S | **Done 2026-11-03** |
+| G32 | Review follow-ups | S | LOW-3, LOW-4 and the shared `isKeyRejection` **done 2026-11-03**. Still open: backlog L2, L3, I1 and I3. |
+| G33 | Control borders below 3:1 non-text contrast | S | Design decision: raising `--line-strong` changes every border. Pinned in `contrast.test.ts`. |
 
 ## Founder decisions pending
 1. Licence. The public repo has none, so it's all rights reserved.

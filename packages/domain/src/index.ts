@@ -13,3 +13,5 @@ export * from "./pairing.js";
 export * from "./session-views.js";
 export * from "./dashboard.js";
 export * from "./data-availability.js";
+export * from "./session-list.js";
+export * from "./backend-errors.js";

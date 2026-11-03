@@ -7,7 +7,7 @@
 // alert history survives an expired sign-in for the same person, but not the
 // arrival of a different one.
 import type { KeyValueStorage } from "@mc/api-client/demo";
-import { alertStorageKey, type AlertStore } from "./alert-store.js";
+import { alertStorageKey, notificationBurstKey, type AlertStore } from "./alert-store.js";
 import { closeSystemNotifications, saveNotificationNamesEnabled, saveSystemNotificationsEnabled } from "./system-notifications.js";
 import { saveThemePreference } from "./theme.js";
 
@@ -37,6 +37,7 @@ export function forgetUserLocalData(storage: KeyValueStorage, backend: string, u
   const key = alertStorageKey(backend, userId);
   try {
     void storage.removeItem(key);
+    void storage.removeItem(notificationBurstKey(key));
   } catch {
     // Blocked storage: there is nothing persisted to remove.
   }

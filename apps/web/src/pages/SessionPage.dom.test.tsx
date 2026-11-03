@@ -1,16 +1,18 @@
 // Component tests for the session detail page (spec 4.3, 18.2) against the
 // real demo backend. Covers the trusted state, both untrusted-state
 // explanations ("disconnected", "Source not responding"), 404, loading and
-// error states, plus an axe smoke check.
+// error states, the alerts list's read and dismiss actions (G25), the
+// back link's return to a filtered dashboard (G23), plus an axe smoke check.
 import { ApiError } from "@mc/api-client/demo";
 import { useEffect, useState, type ReactNode } from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { MemoryRouter, Route, Routes, useLocation, useNavigationType } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAxe } from "vitest-axe";
 import { createDemoApi, type AuthUser, type TavroApi } from "@mc/api-client/demo";
 import type { SessionRow } from "@mc/contracts";
+import { dashboardOrigin } from "@mc/domain";
 import { AlertsProvider } from "../alerts-context.js";
 import { alertStorageKey } from "../alert-store.js";
 import { ApiProvider, useApiContext } from "../api-context.js";
@@ -59,15 +61,26 @@ function SignedIn({ children }: { children: ReactNode }) {
   return api && user ? <AlertsProvider userId={user.id}>{children}</AlertsProvider> : <p>Starting test backend</p>;
 }
 
-function renderSession(id: string) {
+/** The dashboard stand-in; shows the search it was reached with. */
+function DashboardRoute() {
+  return (
+    <>
+      <p>Dashboard route</p>
+      <output data-testid="search">{useLocation().search}</output>
+    </>
+  );
+}
+
+/** `state`: navigation state on the session's entry, as a dashboard link (or anything else) would leave it. */
+function renderSession(id: string, state?: unknown) {
   return render(
     <QueryClientProvider client={queryClient}>
       <ApiProvider>
-        <MemoryRouter initialEntries={[`/sessions/${id}`]}>
+        <MemoryRouter initialEntries={[{ pathname: `/sessions/${id}`, state }]}>
           <SignedIn>
             <Routes>
               <Route path="/sessions/:id" element={<SessionPage />} />
-              <Route path="/" element={<p>Dashboard route</p>} />
+              <Route path="/" element={<DashboardRoute />} />
             </Routes>
           </SignedIn>
         </MemoryRouter>
@@ -257,3 +270,183 @@ describe("SessionPage freshness, alerts and filters (G4, G7)", () => {
     expect(within(filters).getByRole("link", { name: "All Demo data sessions" }).getAttribute("href")).toBe(`/?provider=${live.provider}`);
   });
 });
+
+describe("SessionPage alert actions (G25)", () => {
+  type Seed = { id: string; sessionId: string; kind: string; at: string; read: boolean };
+  /** Stores alerts for the demo user before the page opens, as earlier visits would have. */
+  async function seedAlerts(alerts: Seed[]): Promise<string> {
+    const user = await demo().getUser();
+    if (!user) throw new Error("demo user missing");
+    const key = alertStorageKey("demo", user.id);
+    window.localStorage.setItem(key, JSON.stringify(alerts.map((a) => ({ ...a, hostId: "00000000-0000-4000-8000-0000000000a1", isDemo: true }))));
+    return key;
+  }
+  /** What the store wrote back: id → read. */
+  const stored = (key: string) => new Map((JSON.parse(window.localStorage.getItem(key) ?? "[]") as Seed[]).map((a) => [a.id, a.read]));
+  const kinds = () => within(section("Alerts for this session")).queryAllByRole("listitem").map((li) => li.querySelector(".ra-kind")?.textContent);
+
+  it("marks read and dismisses single alerts, and marks the rest read, only when asked", async () => {
+    const { live, stale } = await demoSessions();
+    const key = await seedAlerts([
+      { id: "a-new", sessionId: live.id, kind: "completed", at: "2026-11-02T09:00:00.000Z", read: false },
+      { id: "a-mid", sessionId: live.id, kind: "waiting_for_input", at: "2026-11-02T08:30:00.000Z", read: false },
+      { id: "a-old", sessionId: live.id, kind: "failed", at: "2026-11-02T08:00:00.000Z", read: true },
+      { id: "a-other", sessionId: stale.id, kind: "failed", at: "2026-11-02T09:30:00.000Z", read: false },
+    ]);
+    renderSession(live.id);
+    await heading(live.title ?? live.external_id);
+    const alerts = section("Alerts for this session");
+    expect(kinds()).toEqual(["Completed", "Waiting for you", "Failed"]);
+
+    // Opening the page marked nothing read.
+    expect(within(alerts).getAllByText("Unread")).toHaveLength(2);
+    expect(stored(key).get("a-new")).toBe(false);
+
+    // Each action is named by the alert's kind; a read alert has nothing to mark.
+    expect(within(alerts).getByRole("button", { name: /^Mark read: Waiting for you, / })).toBeTruthy();
+    expect(within(alerts).queryByRole("button", { name: /^Mark read: Failed, / })).toBeNull();
+    expect(within(alerts).getByRole("button", { name: /^Dismiss alert: Failed, / })).toBeTruthy();
+
+    fireEvent.click(within(alerts).getByRole("button", { name: /^Mark read: Completed, / }));
+    await waitFor(() => expect(within(alerts).getAllByText("Unread")).toHaveLength(1));
+    expect(stored(key)).toEqual(new Map([["a-new", true], ["a-mid", false], ["a-old", true], ["a-other", false]]));
+    // Focus stays on the row, on its remaining action.
+    expect(document.activeElement).toBe(within(alerts).getByRole("button", { name: /^Dismiss alert: Completed, / }));
+
+    fireEvent.click(within(alerts).getByRole("button", { name: /^Dismiss alert: Failed, / }));
+    await waitFor(() => expect(kinds()).toEqual(["Completed", "Waiting for you"]));
+    expect(stored(key).has("a-old")).toBe(false);
+    expect(document.activeElement).toBe(screen.getByRole("heading", { level: 2, name: "Alerts for this session" }));
+
+    // Mark all read covers this session's alerts only.
+    fireEvent.click(within(alerts).getByRole("button", { name: "Mark all read" }));
+    await waitFor(() => expect(within(alerts).queryByText("Unread")).toBeNull());
+    expect(stored(key)).toEqual(new Map([["a-new", true], ["a-mid", true], ["a-other", false]]));
+    expect(within(alerts).queryByRole("button", { name: "Mark all read" })).toBeNull();
+    expect(within(alerts).queryByRole("button", { name: /^Mark read: / })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("heading", { level: 2, name: "Alerts for this session" }));
+
+    // Dismissing the last ones leaves the empty state.
+    fireEvent.click(within(alerts).getByRole("button", { name: /^Dismiss alert: Completed, / }));
+    fireEvent.click(within(alerts).getByRole("button", { name: /^Dismiss alert: Waiting for you, / }));
+    expect(await within(alerts).findByText(/No alerts for this session/)).toBeTruthy();
+    expect(stored(key)).toEqual(new Map([["a-other", false]]));
+  });
+
+  it("offers no Mark all read when every alert is read", async () => {
+    const { live } = await demoSessions();
+    await seedAlerts([{ id: "a-read", sessionId: live.id, kind: "completed", at: "2026-11-02T09:00:00.000Z", read: true }]);
+    renderSession(live.id);
+    await heading(live.title ?? live.external_id);
+    const alerts = section("Alerts for this session");
+    expect(within(alerts).queryByRole("button", { name: "Mark all read" })).toBeNull();
+    expect(within(alerts).getByRole("button", { name: /^Dismiss alert: Completed, / })).toBeTruthy();
+  });
+
+  it("has no axe violations with alert actions", async () => {
+    const { live } = await demoSessions();
+    await seedAlerts([{ id: "a-new", sessionId: live.id, kind: "approval_required", at: "2026-11-02T09:00:00.000Z", read: false }]);
+    const { container } = renderSession(live.id);
+    await heading(live.title ?? live.external_id);
+    await within(section("Status history")).findByText(/^Discovered · /, {}, { timeout: 5000 });
+    expect(within(section("Alerts for this session")).getByRole("button", { name: /^Mark read: Needs approval, / })).toBeTruthy();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe("SessionPage back link (G23)", () => {
+  const backLink = () => screen.getByRole("link", { name: "Sessions" });
+
+  /** Opens the session with `state`, checks the link, follows it and returns the dashboard search reached. */
+  async function followBack(id: string, title: string, state: unknown, href: string): Promise<string | null> {
+    const view = renderSession(id, state);
+    await heading(title);
+    expect(backLink().getAttribute("href"), JSON.stringify(state)).toBe(href);
+    fireEvent.click(backLink());
+    await screen.findByText("Dashboard route");
+    const reached = screen.getByTestId("search").textContent;
+    view.unmount();
+    return reached;
+  }
+
+  it("returns to the dashboard list it was opened from, filters included, and never anywhere else", async () => {
+    const { live } = await demoSessions();
+    const title = live.title ?? live.external_id;
+    // No earlier in-app entry (a reload or restored tab), so the link navigates to its href.
+    expect(await followBack(live.id, title, dashboardOrigin("?state=failed&q=memory"), "/?state=failed&q=memory")).toBe("?state=failed&q=memory");
+
+    // Navigation state is untrusted: anything but the dashboard path with a search falls back to "/".
+    for (const forged of [
+      { dashboardOrigin: { pathname: "/alerts", search: "" } },
+      { dashboardOrigin: { pathname: "//evil.example", search: "" } },
+      { dashboardOrigin: { pathname: "/", search: "//evil.example" } },
+      "https://evil.example/",
+    ]) {
+      expect(await followBack(live.id, title, forged, "/"), JSON.stringify(forged)).toBe("");
+    }
+  });
+
+  /** Somewhere else, then the filtered dashboard, then the session opened from it: as a dashboard card link leaves history. */
+  function renderFromDashboard(id: string, search: string) {
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <ApiProvider>
+          <MemoryRouter initialEntries={["/elsewhere", `/${search}`, { pathname: `/sessions/${id}`, state: dashboardOrigin(search) }]} initialIndex={2}>
+            <SignedIn>
+              <NavigationProbe />
+              <Routes>
+                <Route path="/sessions/:id" element={<SessionPage />} />
+                <Route path="/" element={<DashboardRoute />} />
+                <Route path="/elsewhere" element={<p>Elsewhere route</p>} />
+              </Routes>
+            </SignedIn>
+          </MemoryRouter>
+        </ApiProvider>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("steps back only once on a fast double tap, never past the list", async () => {
+    const { live } = await demoSessions();
+    renderFromDashboard(live.id, "?state=failed");
+    await heading(live.title ?? live.external_id);
+    const link = backLink();
+    // Both clicks land before React re-renders, as a double tap can.
+    act(() => {
+      link.click();
+      link.click();
+    });
+    expect(await screen.findByText("Dashboard route")).toBeTruthy();
+    expect(screen.queryByText("Elsewhere route")).toBeNull();
+    expect(screen.getByTestId("search").textContent).toBe("?state=failed");
+    expect(screen.getByTestId("nav").textContent).toBe("POP");
+  });
+
+  it("not found: Back to sessions steps back to the list like the back link, instead of pushing it again", async () => {
+    renderFromDashboard(UNKNOWN_ID, "?state=failed");
+    const title = await screen.findByRole("heading", { name: "Session not found" }, { timeout: 5000 });
+    fireEvent.click(within(title.closest("[role=status]") as HTMLElement).getByRole("link", { name: "Back to sessions" }));
+    expect(await screen.findByText("Dashboard route")).toBeTruthy();
+    expect(screen.getByTestId("search").textContent).toBe("?state=failed");
+    expect(screen.getByTestId("nav").textContent).toBe("POP");
+  });
+
+  it("offers the back link when neither the session list nor the history could load", async () => {
+    const real = demo();
+    backend.api = {
+      ...real,
+      listSessions: () => Promise.reject(new ApiError("Sessions unavailable", "unavailable")),
+      listEvents: () => Promise.reject(new ApiError("History unavailable", "unavailable")),
+    };
+    renderFromDashboard(UNKNOWN_ID, "?state=failed");
+    await screen.findByRole("alert", {}, { timeout: 5000 });
+    fireEvent.click(backLink());
+    expect(await screen.findByText("Dashboard route")).toBeTruthy();
+    expect(screen.getByTestId("nav").textContent).toBe("POP");
+  });
+});
+
+/** How the current entry was reached: "POP" for a step back, "PUSH" for a new entry. */
+function NavigationProbe() {
+  return <output data-testid="nav">{useNavigationType()}</output>;
+}

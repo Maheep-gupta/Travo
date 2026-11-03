@@ -6,11 +6,13 @@
 // copy (so one tab never overwrites another's read/dismiss state), and other
 // tabs' writes arrive through the `storage` event.
 import type { KeyValueStorage } from "@mc/api-client/demo";
-import { mergeAlerts, parseStoredAlerts, unreadCount, type StoredAlert, type TavroAlert } from "@mc/domain";
+import { mergeAlerts, parseNotificationBurst, parseStoredAlerts, unreadCount, type NotificationBurst, type StoredAlert, type TavroAlert } from "@mc/domain";
 
 export class AlertStore {
   private alerts: readonly StoredAlert[];
   private readonly listeners = new Set<() => void>();
+  /** False once storage failed for the shared burst: each tab then keeps its own. */
+  private burstShared = true;
 
   constructor(
     private readonly storage: KeyValueStorage,
@@ -112,12 +114,90 @@ export class AlertStore {
     this.commit(base, base.some((a) => set.has(a.id)) ? base.filter((a) => !set.has(a.id)) : base);
   }
 
+  /** Removes the alert history and the shared notification burst (Sign out, Clear, another user). */
   clear(): void {
     const base = this.latest();
     this.commit(base, base.length ? [] : base);
+    try {
+      void this.storage.removeItem(this.burstKey);
+    } catch {
+      // Blocked storage: no burst was persisted.
+    }
+  }
+
+  /** Storage key of the notification burst this user's tabs share (counts, kinds and times only). */
+  get burstKey(): string {
+    return notificationBurstKey(this.key);
+  }
+
+  /**
+   * The notification burst shared by this user's tabs (spec 16: one storm
+   * makes one sound, however many tabs are open). Null when there is none or
+   * it expired; undefined when storage can't be used, so the caller falls
+   * back to the burst it keeps itself.
+   */
+  loadBurst(now: number): NotificationBurst | null | undefined {
+    if (!this.burstShared) return undefined;
+    let raw: ReturnType<KeyValueStorage["getItem"]>;
+    try {
+      raw = this.storage.getItem(this.burstKey);
+    } catch {
+      // Blocked storage: each tab keeps its own from now on.
+      this.burstShared = false;
+      return undefined;
+    }
+    if (raw === null) return null;
+    // Web storage is synchronous; an async store (React Native) keeps per-tab behaviour.
+    if (typeof raw !== "string") return undefined;
+    try {
+      return parseNotificationBurst(JSON.parse(raw), now);
+    } catch {
+      return null; // Malformed: no burst.
+    }
+  }
+
+  /** Shares the burst with this user's other tabs; null ends it (the user looked at Tavro). */
+  saveBurst(burst: NotificationBurst | null): void {
+    if (!this.burstShared) return;
+    try {
+      void (burst ? this.storage.setItem(this.burstKey, JSON.stringify(burst)) : this.storage.removeItem(this.burstKey));
+    } catch {
+      // Quota or blocked storage: the stored copy would go stale, so each tab keeps its own from now on.
+      this.burstShared = false;
+    }
+  }
+
+  /**
+   * Reports other tabs' changes to the shared burst; null means another tab
+   * ended it. An unreadable or expired value is ignored: it says nothing about
+   * what the user has seen, so it must not close this tab's notifications.
+   * Returns an unsubscribe function.
+   */
+  watchBurst(target: Pick<Window, "addEventListener" | "removeEventListener">, listener: (burst: NotificationBurst | null) => void): () => void {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== this.burstKey) return;
+      if (e.newValue === null) {
+        listener(null);
+        return;
+      }
+      let burst: NotificationBurst | null = null;
+      try {
+        burst = parseNotificationBurst(JSON.parse(e.newValue), Date.now());
+      } catch {
+        // Malformed: ignored below.
+      }
+      if (burst) listener(burst);
+    };
+    target.addEventListener("storage", onStorage);
+    return () => target.removeEventListener("storage", onStorage);
   }
 }
 
 export function alertStorageKey(backend: string, userId: string): string {
   return `tavro.alerts.v1:${backend}:${userId}`;
+}
+
+/** Storage key of the notification burst shared by the tabs of the user whose alert list is `alertKey`. */
+export function notificationBurstKey(alertKey: string): string {
+  return `tavro.notificationBurst.v1:${alertKey}`;
 }

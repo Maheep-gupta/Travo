@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   ALERT_GROUP_WINDOW_MS,
+  NOTIFICATION_BURST_MAX_AGE_MS,
+  NOTIFICATION_BURST_MAX_COUNT,
   NOTIFICATION_BURST_WINDOW_MS,
   NOTIFICATION_MAX_SILENT_MS,
   alertSummaryText,
   groupAlerts,
   mergeAlerts,
+  parseNotificationBurst,
   planNotifications,
   summarizeAlerts,
   unreadCount,
@@ -201,5 +204,81 @@ describe("alertSummaryText", () => {
     ]);
     expect(alertSummaryText(demo)).toEqual({ title: "Tavro demo · 2 new alerts", body: "2 need approval." });
     expect(alertSummaryText(summarizeAlerts([{ kind: "failed", isDemo: false }], demo)).title).toBe("Tavro · 3 new alerts");
+  });
+});
+
+// G32 / QA LOW-3: the user's tabs share one burst through storage. Each tab
+// reads the stored copy before planning and writes its result back.
+describe("a burst shared between tabs", () => {
+  const t = (kind: AlertKind): TavroAlert => {
+    const { id, kind: k, sessionId, hostId, at: when, isDemo } = alert(kind, 0);
+    return { id, kind: k, sessionId, hostId, at: when, isDemo };
+  };
+  /** One tab's detection pass against the stored copy, as the watcher does it. */
+  function tabPass(stored: { value: string | null }, added: TavroAlert[], now: number) {
+    const previous = stored.value === null ? null : parseNotificationBurst(JSON.parse(stored.value), now);
+    const r = planNotifications(previous, added, now);
+    stored.value = r.burst ? JSON.stringify(r.burst) : null;
+    return r.plan;
+  }
+
+  it("makes one sound for a storm split across two tabs' polls, but still sounds for an approval", () => {
+    const stored = { value: null as string | null };
+    // Tab A's poll finds one completion, tab B's poll (seconds later) two more.
+    const a = tabPass(stored, [t("completed")], T0);
+    const b = tabPass(stored, [t("completed"), t("completed")], T0 + 10_000);
+    const a2 = tabPass(stored, [t("completed")], T0 + 40_000);
+    expect(a).toMatchObject({ kind: "single" });
+    expect(b).toMatchObject({ kind: "summary", silent: true, summary: { total: 3 } });
+    expect(a2).toMatchObject({ kind: "summary", silent: true, summary: { total: 4 } });
+    // D-018: anything the user must act on is always audible, whichever tab sees it.
+    expect(tabPass(stored, [t("approval_required")], T0 + 50_000)).toMatchObject({ kind: "summary", silent: false });
+  });
+
+  it("documents the old per-tab behaviour it replaces: two tabs each sounded", () => {
+    const [a, b] = [planNotifications(null, [t("completed")], T0), planNotifications(null, [t("completed"), t("completed")], T0 + 10_000)];
+    expect(a.plan).toMatchObject({ kind: "single" });
+    expect(b.plan).toMatchObject({ kind: "summary", silent: false });
+  });
+
+  it("round-trips a burst with counts, kinds and times only", () => {
+    const { burst } = planNotifications(null, [t("completed"), t("host_disconnected")], T0);
+    const json = JSON.stringify(burst);
+    expect(parseNotificationBurst(JSON.parse(json), T0 + 1)).toEqual(burst);
+    expect(Object.keys(JSON.parse(json) as object).sort()).toEqual(["lastAudibleAt", "lastShownAt", "summary"]);
+    expect(json).not.toContain("h1");
+  });
+
+  it("forgets a burst that is too old or from the future", () => {
+    const { burst } = planNotifications(null, [t("completed")], T0);
+    expect(parseNotificationBurst(burst, T0 + NOTIFICATION_BURST_MAX_AGE_MS)).toEqual(burst);
+    expect(parseNotificationBurst(burst, T0 + NOTIFICATION_BURST_MAX_AGE_MS + 1)).toBeNull();
+    expect(parseNotificationBurst(burst, T0 - 1)).toBeNull();
+  });
+
+  it("rejects tampered or malformed values", () => {
+    const ok = { summary: { counts: { completed: 2 }, total: 2, allDemo: false }, lastShownAt: T0, lastAudibleAt: T0 };
+    const bad: unknown[] = [
+      null,
+      "x",
+      [],
+      { ...ok, lastShownAt: "soon" },
+      { ...ok, lastAudibleAt: T0 + 1 },
+      { ...ok, summary: { ...ok.summary, total: 3 } },
+      { ...ok, summary: { ...ok.summary, total: 0, counts: {} } },
+      { ...ok, summary: { ...ok.summary, counts: { completed: -1, failed: 3 } } },
+      { ...ok, summary: { ...ok.summary, counts: { "Fix login": 2 } } },
+      { ...ok, summary: { ...ok.summary, counts: { toString: 2 } } },
+      { ...ok, summary: { ...ok.summary, counts: { completed: 1.5, failed: 0.5 } } },
+      { ...ok, summary: { ...ok.summary, allDemo: "no" } },
+      // Counts are safe integers under a sane cap: no precision loss, no absurd totals.
+      { ...ok, summary: { ...ok.summary, counts: { completed: 2 ** 53, failed: 1 }, total: 2 ** 53 + 1 } },
+      { ...ok, summary: { ...ok.summary, counts: { completed: Number.MAX_SAFE_INTEGER }, total: Number.MAX_SAFE_INTEGER } },
+      { ...ok, summary: { ...ok.summary, counts: { completed: NOTIFICATION_BURST_MAX_COUNT + 1 }, total: NOTIFICATION_BURST_MAX_COUNT + 1 } },
+    ];
+    for (const v of bad) expect(parseNotificationBurst(v, T0 + 1)).toBeNull();
+    expect(parseNotificationBurst(ok, T0 + 1)).toEqual(ok);
+    const atCap = { ...ok, summary: { ...ok.summary, counts: { completed: NOTIFICATION_BURST_MAX_COUNT }, total: NOTIFICATION_BURST_MAX_COUNT } };
+    expect(parseNotificationBurst(atCap, T0 + 1)).toEqual(atCap);
   });
 });

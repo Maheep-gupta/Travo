@@ -2,12 +2,14 @@ import { createContext, useContext, useEffect, useMemo, useState, useSyncExterna
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { LiveUpdatesStatus, SignOutResult, TavroApi } from "@mc/api-client/demo";
 import {
+  NO_SESSION_LIST_GAPS,
   buildSessionViews,
   refreshFailure,
   sourceState,
   syncWithRefreshes,
   type ClientSync,
   type RefreshFailure,
+  type SessionListGaps,
   type SessionView,
   type SourceState,
 } from "@mc/domain";
@@ -198,6 +200,12 @@ function useSessionList() {
   return useQuery({ queryKey: userKey(api, userId, "sessions", "list"), queryFn: () => api.listSessions() });
 }
 
+/** What the latest session list left out; null where the backend doesn't report it or no list has loaded. */
+function useSessionListGaps(): SessionListGaps | null {
+  const info = useApi().sessionList;
+  return useSyncExternalStore(info ? info.onChange : noLiveUpdates, () => info?.gaps() ?? null);
+}
+
 export interface StatusSync {
   /** The banner's state: this client's own fetches. */
   connection: ConnectionState;
@@ -241,6 +249,10 @@ export interface SessionViewsResult {
   refresh: RefreshFailure | null;
   /** The banner's state, made stale by a failed refresh; what the views were judged by. */
   sync: ClientSync;
+  /** More sessions exist than the list returns; counts cover only those shown (spec 3.1, 10.2). */
+  truncated: boolean;
+  /** Session rows that couldn't be read and aren't shown (Part 16). */
+  dropped: number;
   /** Either list is on its first load. */
   isLoading: boolean;
   /** The first of the two lists' latest errors; pages pick the one that matches what is missing. */
@@ -255,6 +267,9 @@ export function useSessionViews(): SessionViewsResult {
   const now = useStatusClock();
   const sessions = useSessionList();
   const hosts = useHosts();
+  // Only once a list is on screen: the gaps describe that list.
+  const gaps = useSessionListGaps();
+  const listGaps = sessions.data !== undefined && gaps ? gaps : NO_SESSION_LIST_GAPS;
   const { sessions: sessionsState, hosts: hostsState, sync } = statusSyncOf(useConnection(now), sessions, hosts);
   const refresh = refreshFailure([
     { source: "sessions", state: sessionsState, fetchedAt: sessions.dataUpdatedAt },
@@ -279,6 +294,8 @@ export function useSessionViews(): SessionViewsResult {
     hostsError: hosts.error,
     refresh,
     sync,
+    truncated: listGaps.truncated,
+    dropped: listGaps.dropped,
     isLoading: sessions.isLoading || hosts.isLoading,
     error: sessions.error ?? hosts.error,
     refetch: () => {

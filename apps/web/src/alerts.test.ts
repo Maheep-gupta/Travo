@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { MemoryStorage } from "@mc/api-client/demo";
-import { summarizeAlerts, type TavroAlert } from "@mc/domain";
-import { AlertStore, alertStorageKey } from "./alert-store.js";
+import { planNotifications, summarizeAlerts, type TavroAlert } from "@mc/domain";
+import { AlertStore, alertStorageKey, notificationBurstKey } from "./alert-store.js";
 import {
+  closeSystemNotifications,
+  closeSystemSingles,
   loadNotificationNamesEnabled,
   loadSystemNotificationsEnabled,
   requestSystemNotifications,
@@ -238,5 +240,110 @@ describe("unread indicator", () => {
     await Promise.resolve(); // the rejection is swallowed, not unhandled
     expect(() => updateAppBadge(1, {})).not.toThrow();
     expect(() => updateAppBadge(1, { setAppBadge: () => { throw new Error("sync"); }, clearAppBadge: vi.fn() })).not.toThrow();
+  });
+});
+
+// G32 / QA LOW-3: one burst for all of a user's tabs (counts, kinds and times only).
+describe("AlertStore shared notification burst", () => {
+  const T = Date.parse("2026-11-03T10:00:00Z");
+  const burstOf = (n: number) => planNotifications(null, Array.from({ length: n }, (_, i) => alert(`b${i}`)), T).burst;
+
+  it("shares one burst between two tabs' stores, scoped per user, and ends it for both", () => {
+    const storage = new MemoryStorage();
+    const tabA = new AlertStore(storage, KEY);
+    const tabB = new AlertStore(storage, KEY);
+    const other = new AlertStore(storage, alertStorageKey("demo", "u2"));
+    expect(tabB.loadBurst(T)).toBeNull();
+    tabA.saveBurst(burstOf(1));
+    expect(tabB.loadBurst(T + 1_000)).toEqual(burstOf(1));
+    expect(other.loadBurst(T + 1_000)).toBeNull();
+    // Nothing identifying is stored.
+    expect(storage.getItem(tabA.burstKey)).not.toMatch(/b0|s1|h1/);
+    tabB.saveBurst(null);
+    expect(tabA.loadBurst(T + 2_000)).toBeNull();
+  });
+
+  it("clear() removes the shared burst with the history, even when the history is already empty", () => {
+    const storage = new MemoryStorage();
+    const store = new AlertStore(storage, KEY);
+    const other = new AlertStore(storage, alertStorageKey("demo", "u2"));
+    store.saveBurst(burstOf(2));
+    other.saveBurst(burstOf(1));
+    expect(storage.getItem(notificationBurstKey(KEY))).not.toBeNull();
+    store.clear();
+    expect(storage.getItem(notificationBurstKey(KEY))).toBeNull();
+    // Another user's burst is theirs.
+    expect(storage.getItem(other.burstKey)).not.toBeNull();
+    expect(store.burstKey).toBe(notificationBurstKey(KEY));
+    // Blocked storage: clear() still works in memory.
+    const blocked = new AlertStore({ getItem: () => null, setItem: () => undefined, removeItem: () => { throw new Error("blocked"); } }, KEY);
+    expect(() => blocked.clear()).not.toThrow();
+  });
+
+  it("treats a malformed stored burst as none", () => {
+    const storage = new MemoryStorage();
+    const store = new AlertStore(storage, KEY);
+    storage.setItem(store.burstKey, "{not json");
+    expect(store.loadBurst(T)).toBeNull();
+    storage.setItem(store.burstKey, JSON.stringify({ summary: { counts: { "Fix login": 1 }, total: 1, allDemo: false }, lastShownAt: T, lastAudibleAt: T }));
+    expect(store.loadBurst(T)).toBeNull();
+  });
+
+  it("falls back to per-tab behaviour (undefined) when storage is blocked or stops accepting writes", () => {
+    const throwing = { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); }, removeItem: () => undefined };
+    const blocked = new AlertStore(throwing, KEY);
+    expect(blocked.loadBurst(T)).toBeUndefined();
+    expect(() => blocked.saveBurst(burstOf(1))).not.toThrow();
+
+    // Reads work but writes fail (quota): a stored copy would go stale, so stop sharing.
+    const storage = new MemoryStorage();
+    const full = new AlertStore({ getItem: (k) => storage.getItem(k), setItem: () => { throw new Error("quota"); }, removeItem: (k) => storage.removeItem(k) }, KEY);
+    expect(full.loadBurst(T)).toBeNull();
+    full.saveBurst(burstOf(1));
+    expect(full.loadBurst(T)).toBeUndefined();
+  });
+
+  it("reports other tabs' burst changes and removals, ignoring other keys and unreadable values", () => {
+    const store = new AlertStore(new MemoryStorage(), KEY);
+    let fire: ((e: StorageEvent) => void) | undefined;
+    const target = { addEventListener: vi.fn((_: string, fn: (e: StorageEvent) => void) => (fire = fn)), removeEventListener: vi.fn() };
+    const seen: unknown[] = [];
+    const stop = store.watchBurst(target as unknown as Window, (b) => seen.push(b));
+    const now = Date.now();
+    const burst = planNotifications(null, [alert("x"), alert("y")], now).burst;
+    const expired = planNotifications(null, [alert("x"), alert("y")], now - 2 * 60 * 60_000).burst;
+    fire?.({ key: KEY, newValue: "[]" } as StorageEvent);
+    fire?.({ key: store.burstKey, newValue: JSON.stringify(burst) } as StorageEvent);
+    // Unreadable or expired: says nothing about what the user saw, so not reported as an end.
+    fire?.({ key: store.burstKey, newValue: "{bad" } as StorageEvent);
+    fire?.({ key: store.burstKey, newValue: JSON.stringify({ summary: { counts: { failed: 1e300 }, total: 1e300, allDemo: false }, lastShownAt: now, lastAudibleAt: now }) } as StorageEvent);
+    fire?.({ key: store.burstKey, newValue: JSON.stringify(expired) } as StorageEvent);
+    fire?.({ key: store.burstKey, newValue: null } as StorageEvent);
+    expect(seen).toEqual([burst, null]);
+    stop();
+    expect(target.removeEventListener).toHaveBeenCalled();
+  });
+
+  it("closes only this tab's per-alert notifications when another tab's summary counts them", () => {
+    closeSystemNotifications();
+    const made: { tag: string; close: () => void }[] = [];
+    const Fake = Object.assign(
+      function (this: { tag: string; close: () => void }, _title: string, options?: NotificationOptions) {
+        this.tag = options?.tag ?? "";
+        this.close = vi.fn();
+        made.push(this);
+      },
+      { permission: "granted" as NotificationPermission, requestPermission: () => Promise.resolve("granted" as NotificationPermission) },
+    ) as unknown as NotificationApi;
+    showSystemSummary(summarizeAlerts([alert("a"), alert("b")]), vi.fn(), false, Fake);
+    showSystemNotification(alert("c"), vi.fn(), Fake);
+    const [summary, single] = made;
+    closeSystemSingles();
+    expect(single?.close).toHaveBeenCalledOnce();
+    // The summary's tag is shared across tabs; closing ours could close theirs.
+    expect(summary?.close).not.toHaveBeenCalled();
+    closeSystemNotifications();
+    expect(summary?.close).toHaveBeenCalledOnce();
+    expect(single?.close).toHaveBeenCalledOnce();
   });
 });

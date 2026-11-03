@@ -519,17 +519,23 @@ describe("Settings: integrations and application", () => {
   });
 
   it("says whether live updates work, and that the 30 s refresh covers them when they don't", async () => {
-    let status: LiveUpdatesStatus | null = "on";
+    let status: LiveUpdatesStatus | null = "connecting";
     const listeners = new Set<() => void>();
     const liveUpdates: LiveUpdates = {
       status: () => status,
       onChange: (cb) => {
+        // The channel connects between the card's first render and its
+        // subscription, with no notification: the card must still show it.
+        if (status === "connecting") status = "on";
         listeners.add(cb);
         return () => void listeners.delete(cb);
       },
     };
     backend.api = { ...demo, kind: "supabase", liveUpdates };
     await renderSettings();
+    // findBy* leaves the commit's effects to React's scheduler, so the card may
+    // not have subscribed yet; a change fired before that reaches no one.
+    await waitFor(() => expect(listeners.size).toBe(1));
     const row = () => within(section("Application")).getByText("Live updates").parentElement?.textContent;
     expect(row()).toBe("Live updatesOn");
 

@@ -7,31 +7,22 @@ import {
   SessionMessageRow,
   SessionRow,
 } from "@mc/contracts";
+import { SESSION_LIST_LIMIT } from "@mc/contracts/constants";
+import { POSTGREST_JWT_ERROR_CODES, isKeyRejection } from "@mc/domain";
 import type { z } from "zod";
 import { ApiError, type AuthUser, type ChangeTopic, type LiveUpdatesStatus, type TavroApi } from "./api.js";
 import { ConnectionConfig } from "./connection.js";
+import { createSessionListStore } from "./session-list-store.js";
 import type { KeyValueStorage } from "./storage.js";
 
 /** Shown whenever the database stops accepting the signed-in session. */
 export const SESSION_EXPIRED_MESSAGE = "Your sign-in has expired. Please sign in again.";
 
-// PostgREST JWT failures: invalid or expired token (301), anonymous access
-// refused (302), claims failed validation, e.g. `exp` in the past (303).
-const JWT_ERROR_CODES: ReadonlySet<string> = new Set(["PGRST301", "PGRST302", "PGRST303"]);
+// The rule itself lives in @mc/domain, shared with the connector (G32).
+export { isKeyRejection };
 
 /** Shown when the project refuses the app's publishable key; never the response text itself. */
 export const KEY_REJECTED_MESSAGE = "Your Supabase project rejected this app's publishable key. If the key was rotated, choose Change backend and enter the current one.";
-
-/**
- * Whether a 401 came from the API gateway refusing the `apikey` (rotated,
- * revoked or mistyped publishable key) rather than from an expired sign-in.
- * The gateway answers e.g. `{"message":"Invalid API key","hint":"…"}`; PostgREST
- * and Auth never mention an API key for a bad user token. Only matched, never shown.
- */
-export function isKeyRejection(e: { message?: string; code?: string; hint?: string | null } | null, status?: number): boolean {
-  if (status !== 401 || (e?.code !== undefined && JWT_ERROR_CODES.has(e.code))) return false;
-  return /\bapi key\b/i.test(`${e?.message ?? ""} ${e?.hint ?? ""}`);
-}
 
 /**
  * Supabase's status for "the project is paused": it serves nothing until its
@@ -40,6 +31,9 @@ export function isKeyRejection(e: { message?: string; code?: string; hint?: stri
  * otherwise the request fails like any network error and counts as unavailable.
  */
 export const PROJECT_PAUSED_STATUS = 540;
+
+/** A session row that fails validation, when asked for on its own. */
+export const SESSION_UNREADABLE_MESSAGE = "This session's data couldn't be read.";
 
 export const RATE_LIMITED_MESSAGE = "Your Supabase project is receiving too many requests. Wait a few minutes and try again.";
 
@@ -75,7 +69,7 @@ export function toApiError(e: Pick<PostgrestError, "code" | "message" | "hint"> 
   if (isKeyRejection(e, status)) return new ApiError(KEY_REJECTED_MESSAGE, "misconfigured");
   // A 401 is always an authentication failure, including 42501 on a request
   // that went out anonymously because the session was already gone.
-  if ((code !== undefined && JWT_ERROR_CODES.has(code)) || status === 401 || /jwt expired/i.test(e?.message ?? "")) {
+  if ((code !== undefined && POSTGREST_JWT_ERROR_CODES.has(code)) || status === 401 || /jwt expired/i.test(e?.message ?? "")) {
     return new ApiError(SESSION_EXPIRED_MESSAGE, "unauthorized");
   }
   if (status === 429) return new ApiError(RATE_LIMITED_MESSAGE, "rate_limited");
@@ -107,6 +101,23 @@ export function toSignInError(e: { name?: string; message?: string; code?: strin
 
 function parseRows<T extends z.ZodTypeAny>(schema: T, rows: unknown): z.infer<T>[] {
   return schema.array().parse(rows ?? []);
+}
+
+/**
+ * Validates each row on its own: a malformed row is dropped and counted, so
+ * one bad row can't fail a whole list (Part 16). Only the count leaves here:
+ * neither the row nor zod's issues (which quote values) are kept or logged.
+ * A response that isn't a list at all still fails.
+ */
+export function parseEachRow<T extends z.ZodTypeAny>(schema: T, rows: unknown): { rows: z.infer<T>[]; dropped: number } {
+  const all: unknown = rows ?? [];
+  if (!Array.isArray(all)) throw new ApiError("The request failed. Check your connection and try again.", "unknown");
+  const valid: z.infer<T>[] = [];
+  for (const row of all as unknown[]) {
+    const parsed = schema.safeParse(row);
+    if (parsed.success) valid.push(parsed.data as z.infer<T>);
+  }
+  return { rows: valid, dropped: all.length - valid.length };
 }
 
 /**
@@ -212,6 +223,10 @@ export function createSupabaseApi(config: ConnectionConfig, storage: KeyValueSto
   let liveChannel: object | null = null;
   let liveStatus: LiveUpdatesStatus | null = null;
   const liveListeners = new Set<() => void>();
+  // What the latest session list left out; forgotten with the user's session,
+  // and whenever this tab's auth reports a different user (a sign-in in another tab).
+  const sessionList = createSessionListStore();
+  const sessionListUser = client.auth.onAuthStateChange((_event, session) => sessionList.setUser(session?.user.id ?? null));
   const setLiveStatus = (channel: object, next: LiveUpdatesStatus | null) => {
     if (channel !== liveChannel || next === liveStatus) return;
     liveStatus = next;
@@ -228,6 +243,8 @@ export function createSupabaseApi(config: ConnectionConfig, storage: KeyValueSto
         return () => void liveListeners.delete(cb);
       },
     },
+
+    sessionList: { gaps: sessionList.gaps, onChange: sessionList.onChange },
 
     async getSchemaVersion() {
       const { data, error, status } = await client.from("app_meta").select("schema_version").maybeSingle();
@@ -250,6 +267,7 @@ export function createSupabaseApi(config: ConnectionConfig, storage: KeyValueSto
       if (error) throw toSignInError(error);
     },
     async signOut(options) {
+      sessionList.reset();
       const { error } = await client.auth.signOut(options?.localOnly ? { scope: "local" } : undefined);
       if (!error) return { serverRevoked: true };
       // auth-js keeps the session if it couldn't load it first (e.g. a refresh that
@@ -263,6 +281,8 @@ export function createSupabaseApi(config: ConnectionConfig, storage: KeyValueSto
     async close() {
       // No logout request: a user leaving a project is often leaving one that
       // is unreachable or refuses the key, and nothing may go to the next one.
+      sessionList.reset();
+      sessionListUser.data.subscription.unsubscribe();
       await dropLocalSession();
       await client.auth.dispose();
       void client.realtime.disconnect();
@@ -277,14 +297,34 @@ export function createSupabaseApi(config: ConnectionConfig, storage: KeyValueSto
     },
 
     async listSessions() {
-      const { data, error, status } = await client.from("sessions").select("*").order("last_activity_at", { ascending: false }).limit(500);
+      const token = sessionList.begin();
+      // One row past the limit, only to learn whether more exist. Most recent
+      // activity first, so the newest are kept: no activity yet sorts last
+      // (Postgres puts NULLs first in DESC), and id breaks ties at the
+      // cut-off, so the same sessions are kept on every poll.
+      const { data, error, status } = await client
+        .from("sessions")
+        .select("*")
+        .order("last_activity_at", { ascending: false, nullsFirst: false })
+        .order("id")
+        .limit(SESSION_LIST_LIMIT + 1);
       if (error) throw toApiError(error, status);
-      return parseRows(SessionRow, data);
+      // Parsed before the cut, so valid rows past the limit fill the places of
+      // unreadable ones. More rows than the limit came back: more may exist.
+      const raw: unknown = data ?? [];
+      const { rows, dropped } = parseEachRow(SessionRow, raw);
+      const truncated = Array.isArray(raw) && raw.length > SESSION_LIST_LIMIT;
+      sessionList.report(token, { truncated, dropped });
+      return rows.slice(0, SESSION_LIST_LIMIT);
     },
     async getSession(id) {
       const { data, error, status } = await client.from("sessions").select("*").eq("id", id).maybeSingle();
       if (error) throw toApiError(error, status);
-      return data ? SessionRow.parse(data) : null;
+      if (!data) return null;
+      // A malformed row (one the list drops) gets a message safe to show; zod's issues quote values.
+      const parsed = SessionRow.safeParse(data);
+      if (!parsed.success) throw new ApiError(SESSION_UNREADABLE_MESSAGE, "invalid");
+      return parsed.data;
     },
     async listEvents(sessionId, limit = 100) {
       const { data, error, status } = await client

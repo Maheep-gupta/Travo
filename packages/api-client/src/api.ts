@@ -1,4 +1,5 @@
 import type { HostRow, NotificationPrefs, PairingTicket, SessionEventRow, SessionMessageRow, SessionRow } from "@mc/contracts";
+import type { SessionListGaps } from "@mc/domain";
 
 export type BackendKind = "demo" | "supabase";
 
@@ -23,6 +24,17 @@ export type LiveUpdatesStatus = "connecting" | "on" | "unavailable";
 export interface LiveUpdates {
   /** Null while nothing is subscribed. */
   status(): LiveUpdatesStatus | null;
+  onChange(cb: () => void): () => void;
+}
+
+/**
+ * What the latest session list left out, for display. A side channel (like
+ * LiveUpdates) so `listSessions` keeps returning plain rows and every cache of
+ * that list keeps its shape. Counts only, never row content.
+ */
+export interface SessionListInfo {
+  /** Gaps in the latest successful `listSessions`; null before one and after sign-out. Stable until it changes. */
+  gaps(): SessionListGaps | null;
   onChange(cb: () => void): () => void;
 }
 
@@ -55,6 +67,11 @@ export interface TavroApi {
   close(): Promise<void>;
   onAuthChange(cb: (user: AuthUser | null) => void): () => void;
 
+  /**
+   * At most SESSION_LIST_LIMIT sessions, most recently active first. A row that
+   * fails validation is left out instead of failing the list; what was left
+   * out is reported through `sessionList`.
+   */
   listSessions(): Promise<SessionRow[]>;
   getSession(id: string): Promise<SessionRow | null>;
   listEvents(sessionId: string, limit?: number): Promise<SessionEventRow[]>;
@@ -71,6 +88,8 @@ export interface TavroApi {
   subscribe(cb: (topic: ChangeTopic) => void): () => void;
   /** How the latest subscription is doing. Absent where there is no server push to fail (demo). */
   readonly liveUpdates?: LiveUpdates;
+  /** What the latest session list left out. Absent where nothing reports it (test doubles): treated as complete. */
+  readonly sessionList?: SessionListInfo;
 }
 
 /**

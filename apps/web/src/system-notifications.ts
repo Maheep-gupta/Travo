@@ -175,3 +175,16 @@ export function closeSystemNotifications(): void {
   for (const n of open) n.close();
   open.clear();
 }
+
+/**
+ * Closes this tab's per-alert notifications, for when another tab's summary
+ * now counts them. Its summary is left alone: browsers replace notifications
+ * by tag across tabs, so closing ours could close the other tab's new one.
+ */
+export function closeSystemSingles(): void {
+  for (const n of open) {
+    if (n.tag === "tavro:summary") continue;
+    n.close();
+    open.delete(n);
+  }
+}

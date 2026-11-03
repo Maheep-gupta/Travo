@@ -3,14 +3,17 @@
 // arrival removes the previous one's.
 import { describe, expect, it } from "vitest";
 import { MemoryStorage } from "@mc/api-client/demo";
-import { AlertStore, alertStorageKey } from "./alert-store.js";
+import { AlertStore, alertStorageKey, notificationBurstKey } from "./alert-store.js";
 import { clearLocalTavroData, forgetUserLocalData, lastUserKey, noteSignedInUser } from "./local-data.js";
 
 const NAMES_PREFIX = "tavro.systemNotificationNames.v1:";
 
+const BURST = '{"summary":{"counts":{"completed":1},"total":1,"allDemo":false},"lastShownAt":1,"lastAudibleAt":1}';
+
 function seed(storage: MemoryStorage, backend: string, userId: string): void {
   storage.setItem(alertStorageKey(backend, userId), '[{"id":"x"}]');
   storage.setItem(NAMES_PREFIX + alertStorageKey(backend, userId), "on");
+  storage.setItem(notificationBurstKey(alertStorageKey(backend, userId)), BURST);
 }
 
 describe("noteSignedInUser", () => {
@@ -29,9 +32,10 @@ describe("noteSignedInUser", () => {
     expect(noteSignedInUser(storage, "supabase", "a")).toBeNull();
     expect(storage.getItem(alertStorageKey("supabase", "a"))).toBe('[{"id":"x"}]');
     expect(storage.getItem(NAMES_PREFIX + alertStorageKey("supabase", "a"))).toBe("on");
+    expect(storage.getItem(notificationBurstKey(alertStorageKey("supabase", "a")))).toBe(BURST);
   });
 
-  it("forgets the previous user's alerts and names opt-in when a different user signs in", () => {
+  it("forgets the previous user's alerts, notification burst and names opt-in when a different user signs in", () => {
     const storage = new MemoryStorage();
     noteSignedInUser(storage, "supabase", "a");
     seed(storage, "supabase", "a");
@@ -42,8 +46,10 @@ describe("noteSignedInUser", () => {
     expect(storage.getItem(lastUserKey("supabase"))).toBe("b");
     expect(storage.getItem(alertStorageKey("supabase", "a"))).toBeNull();
     expect(storage.getItem(NAMES_PREFIX + alertStorageKey("supabase", "a"))).toBeNull();
+    expect(storage.getItem(notificationBurstKey(alertStorageKey("supabase", "a")))).toBeNull();
     // B's own data and the device-wide switch stay.
     expect(storage.getItem(alertStorageKey("supabase", "b"))).toBe('[{"id":"x"}]');
+    expect(storage.getItem(notificationBurstKey(alertStorageKey("supabase", "b")))).toBe(BURST);
     expect(storage.getItem("tavro.systemNotifications.v1")).toBe("on");
   });
 
@@ -70,6 +76,18 @@ describe("noteSignedInUser", () => {
     };
     expect(noteSignedInUser(blocked, "supabase", "a")).toBeNull();
     expect(() => forgetUserLocalData(blocked, "supabase", "a")).not.toThrow();
+  });
+});
+
+describe("clearLocalTavroData", () => {
+  it("removes this account's alert history and shared notification burst, and no one else's", () => {
+    const storage = new MemoryStorage();
+    seed(storage, "supabase", "a");
+    seed(storage, "supabase", "b");
+    clearLocalTavroData(storage, new AlertStore(storage, alertStorageKey("supabase", "a")), "supabase", "a");
+    expect(storage.getItem(notificationBurstKey(alertStorageKey("supabase", "a")))).toBeNull();
+    expect(storage.getItem(NAMES_PREFIX + alertStorageKey("supabase", "a"))).toBeNull();
+    expect(storage.getItem(notificationBurstKey(alertStorageKey("supabase", "b")))).toBe(BURST);
   });
 });
 

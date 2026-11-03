@@ -1,5 +1,5 @@
 import { useId, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { Link, useLocation, useSearchParams } from "react-router";
 import {
   EMPTY_DASHBOARD_FILTER,
   EXTRA_STATES,
@@ -15,6 +15,7 @@ import {
   countByState,
   countsAsOf,
   dashboardHeadline,
+  dashboardOrigin,
   formatDataTime,
   freshnessLabel,
   isFiltering,
@@ -26,9 +27,12 @@ import {
   projectOptions,
   relativeTime,
   trustedHostCount,
+  unknownStateCounts,
+  unknownStateMessage,
   unreadBySession,
   unreadCount,
   type DashboardFilter,
+  type DashboardOrigin,
   type DisplayStatus,
   type Freshness,
   type SessionSort,
@@ -36,7 +40,7 @@ import {
 } from "@mc/domain";
 import { useAlerts } from "../alerts-context.js";
 import { useApi } from "../api-context.js";
-import { DemoTag, EmptyState, ErrorState, MissingDataNotice, PageHeader, RefreshFailedNotice, SessionListSkeleton, StatusBadge } from "../components.js";
+import { DemoTag, EmptyState, ErrorState, MissingDataNotice, PageHeader, RefreshFailedNotice, SessionListSkeleton, StatusBadge, TruncatedNotice } from "../components.js";
 import { useConnection, useHosts, useNow, useSessionViews } from "../hooks.js";
 import { IconBell, IconClock, IconClose, IconFolder, IconHost, IconSearch, IconSessions } from "../icons.js";
 import { dashboardFilterParams, noMatchMessage, unreadAlertsLabel } from "../view-model.js";
@@ -47,6 +51,8 @@ const HOST_NOT_LOADED_OPTION = "Host (not loaded)";
 
 const plural = (n: number) => `${n} ${n === 1 ? "session" : "sessions"}`;
 
+const UNKNOWN_COUNT_LABEL = "unknown while host status isn't loaded";
+
 export function DashboardPage() {
   const api = useApi();
   const views = useSessionViews();
@@ -56,6 +62,8 @@ export function DashboardPage() {
   // Sessions are the subject; hosts decide whether their statuses can be trusted, and still show if sessions fail.
   const availability = pageAvailability({ main: views.sessions, context: views.hosts, fallback: views.hosts });
   const [params, setParams] = useSearchParams();
+  // Session links carry this list's URL, so the session's back link returns to it, filters included.
+  const origin = dashboardOrigin(useLocation().search);
   const parsed = parseDashboardFilter(params);
   // A well-formed host id that isn't one of ours is ignored like any other invalid value. Until the
   // host list is in, it can't be checked: it is kept (it still filters sessions by host id), so the
@@ -129,6 +137,11 @@ export function DashboardPage() {
   const allSelected = !group && !state;
   const toggleState = (s: DisplayStatus) => update({ group: null, state: state === s && !group ? null : s }, "push");
   const chipStates = [...OVERVIEW_STATES, ...EXTRA_STATES.filter((s) => counts.byState[s] > 0 || state === s)];
+  // Without the host list nothing can be Disconnected or Source not responding, so their "0" would be a guess.
+  const unknownCounts = unknownStateCounts({ hostsLoaded: hostsReady });
+  // Such a chip stays usable (a URL can select it, and a disabled chip couldn't be unpressed or say why);
+  // its empty list says the state can't be told rather than that nothing matches.
+  const unknownFilterMessage = unknownStateMessage(state, unknownCounts);
 
   return (
     <main className="page">
@@ -139,6 +152,7 @@ export function DashboardPage() {
           <>Live status from your paired hosts. Sessions that need you are listed first.</>
         )}
       </PageHeader>
+      <TruncatedNotice truncated={views.truncated} dropped={views.dropped} />
 
       {/* Alerts are stored on this device, so they show even while sessions load or fail. */}
       {unread > 0 && (
@@ -196,20 +210,24 @@ export function DashboardPage() {
             </button>
           </div>
           <div className="state-chips" role="group" aria-label="Filter sessions by state">
-            {chipStates.map((s) => (
-              <button
-                key={s}
-                type="button"
-                className={`state-chip st-${s} ${counts.byState[s] === 0 ? "empty" : ""}`}
-                aria-pressed={state === s && !group}
-                aria-label={`${STATUS_LABEL[s]}: ${plural(counts.byState[s])}`}
-                onClick={() => toggleState(s)}
-              >
-                <span className="dot" aria-hidden="true" />
-                {STATUS_LABEL[s]}
-                <b>{counts.byState[s]}</b>
-              </button>
-            ))}
+            {chipStates.map((s) => {
+              const unknown = unknownCounts.has(s);
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  className={`state-chip st-${s} ${unknown || counts.byState[s] === 0 ? "empty" : ""}`}
+                  aria-pressed={state === s && !group}
+                  aria-label={`${STATUS_LABEL[s]}: ${unknown ? UNKNOWN_COUNT_LABEL : plural(counts.byState[s])}`}
+                  title={unknown ? `Count ${UNKNOWN_COUNT_LABEL}` : undefined}
+                  onClick={() => toggleState(s)}
+                >
+                  <span className="dot" aria-hidden="true" />
+                  {STATUS_LABEL[s]}
+                  <b>{unknown ? "–" : counts.byState[s]}</b>
+                </button>
+              );
+            })}
           </div>
 
           <div className="toolbar dashboard-toolbar">
@@ -329,6 +347,20 @@ export function DashboardPage() {
                 </EmptyState>
               )}
             </div>
+          ) : filtered.length === 0 && unknownFilterMessage !== null ? (
+            <div className="section">
+              <EmptyState title="Can't tell right now" icon={<IconHost />}>
+                <p>{unknownFilterMessage}</p>
+                <div className="actions">
+                  <button type="button" className="btn ghost" onClick={views.refetchHosts}>
+                    Try again
+                  </button>
+                  <button type="button" className="btn" onClick={clearFilters}>
+                    Clear filters
+                  </button>
+                </div>
+              </EmptyState>
+            </div>
           ) : filtered.length === 0 ? (
             <div className="section">
               <EmptyState title="Nothing matches" icon={<IconSearch />}>
@@ -347,9 +379,15 @@ export function DashboardPage() {
             </div>
           ) : (
             <>
-              {attention.length > 0 && <SessionSection title="Needs you" sessions={attention} now={now} unread={unreadBySessionId} />}
+              {attention.length > 0 && <SessionSection title="Needs you" sessions={attention} now={now} unread={unreadBySessionId} origin={origin} />}
               {rest.length > 0 && (
-                <SessionSection title={attention.length ? "Everything else" : "Sessions"} sessions={rest} now={now} unread={unreadBySessionId} />
+                <SessionSection
+                  title={attention.length ? "Everything else" : "Sessions"}
+                  sessions={rest}
+                  now={now}
+                  unread={unreadBySessionId}
+                  origin={origin}
+                />
               )}
             </>
           )}
@@ -381,12 +419,15 @@ export function SessionSection({
   sessions,
   now,
   unread,
+  origin,
 }: {
   title: string;
   sessions: SessionView[];
   now: Date;
   /** Unread alerts per session id; cards with any say so. */
   unread?: ReadonlyMap<string, number>;
+  /** The dashboard list the cards were opened from, for the session's back link. */
+  origin?: DashboardOrigin;
 }) {
   const id = `section-${title.replace(/\W+/g, "-").toLowerCase()}`;
   return (
@@ -398,7 +439,7 @@ export function SessionSection({
       <ul className="session-list grid">
         {sessions.map((s) => (
           <li key={s.id}>
-            <SessionCard session={s} now={now} unreadAlerts={unread?.get(s.id) ?? 0} />
+            <SessionCard session={s} now={now} unreadAlerts={unread?.get(s.id) ?? 0} origin={origin} />
           </li>
         ))}
       </ul>
@@ -406,11 +447,22 @@ export function SessionSection({
   );
 }
 
-export function SessionCard({ session: s, now, unreadAlerts = 0 }: { session: SessionView; now: Date; unreadAlerts?: number }) {
+export function SessionCard({
+  session: s,
+  now,
+  unreadAlerts = 0,
+  origin,
+}: {
+  session: SessionView;
+  now: Date;
+  unreadAlerts?: number;
+  origin?: DashboardOrigin;
+}) {
   const attention = needsAttention(s.displayStatus);
   return (
     <Link
       to={`/sessions/${s.id}`}
+      state={origin}
       className={`session-card st-${s.displayStatus} ${attention ? "attention" : ""} ${unreadAlerts > 0 ? "has-unread" : ""}`}
     >
       <div className="sc-top">

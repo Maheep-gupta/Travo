@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@mc/api-client/demo";
 import { FETCH_GRACE_MS, MAX_FETCH_RETRIES, STALE_DATA_AFTER_MS, formatDataTime } from "./connectivity.js";
 import { UserIdContext, createQueryClient } from "./hooks.js";
+import { ErrorState } from "./components.js";
 import { OfflineBanner } from "./offline-banner.js";
 
 const USER = "u1";
@@ -223,5 +224,32 @@ describe("OfflineBanner with the app's query client (outage and recovery)", () =
     renderBanner();
     await advance(5_000);
     expect(text()).toBe("");
+  });
+});
+
+// QA LOW-4: a paused project before anything loaded is explained once, by the banner.
+describe("paused project before the first load", () => {
+  const PAUSED = "Your Supabase project is paused. Restore it from the project's page in the Supabase dashboard, then try again.";
+
+  /** A page whose only data failed on its first load, as DashboardPage or HostsPage would show it. */
+  function FailingPage({ error }: { error: ApiError }) {
+    const q = useQuery({ queryKey: HOSTS, queryFn: () => Promise.reject(error) });
+    return q.error ? <ErrorState error={q.error} onRetry={() => void q.refetch()} /> : null;
+  }
+
+  it("lets the banner speak and has the page point to it", async () => {
+    renderBanner(<FailingPage error={new ApiError(PAUSED, "paused")} />);
+    await waitFor(() => expect(text()).toContain("Your Supabase project is paused"));
+    const note = await screen.findByRole("note");
+    expect(note.textContent).toContain("See the notice at the top of the page");
+    // Said once: no second alert, and the restore instructions appear only in the banner.
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(document.body.textContent?.match(/Restore it from the project's page/g)).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  });
+
+  it("keeps the page's own message for other errors", async () => {
+    renderBanner(<FailingPage error={new ApiError("Could not reach your Supabase project.", "unavailable")} />);
+    expect((await screen.findByRole("alert")).textContent).toContain("Could not reach your Supabase project.");
   });
 });

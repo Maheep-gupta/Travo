@@ -1,6 +1,6 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Link } from "react-router";
-import { ALERT_LABEL, groupAlerts, relativeTime, unreadCount, type AlertKind, type StoredAlert } from "@mc/domain";
+import { ALERT_LABEL, groupAlerts, relativeTime, unreadCount, type AlertKind, type SourceState, type StoredAlert } from "@mc/domain";
 import { alertHref, useAlerts, useAlertStore } from "../alerts-context.js";
 import { DemoTag, EmptyState, Notice, PageHeader } from "../components.js";
 import { useHosts, useNow, useSessionViews } from "../hooks.js";
@@ -27,6 +27,22 @@ function groupTitle(kind: AlertKind, n: number): string {
   return `${what} · ${n} alerts`;
 }
 
+/**
+ * A name from live data (spec 5.5). "No longer listed" is claimed only once
+ * the list has loaded without it; before that the row says what is known.
+ */
+function nameOf(name: string | undefined, list: SourceState, missing: string): string {
+  if (name !== undefined) return name;
+  if (list === "loading") return "Loading name…";
+  if (list === "failed") return "Name unavailable";
+  return missing;
+}
+
+/** Every row's link or group toggle, in reading order (expanded groups' members included). */
+function rowLinks(list: HTMLUListElement | null): HTMLElement[] {
+  return Array.from(list?.querySelectorAll<HTMLElement>(".alert-link") ?? []);
+}
+
 export function AlertsPage() {
   const alerts = useAlerts();
   const store = useAlertStore();
@@ -34,6 +50,42 @@ export function AlertsPage() {
   const sessions = useSessionViews();
   const hosts = useHosts();
   const [confirmClear, setConfirmClear] = useState(false);
+
+  // Actions that remove or disable the focused control move focus somewhere
+  // sensible once the list re-renders (WCAG 2.4.3), and say what happened.
+  const listRef = useRef<HTMLUListElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const emptyRef = useRef<HTMLHeadingElement>(null);
+  const clearRef = useRef<HTMLButtonElement>(null);
+  /** "link": the row now at this position in the list, else the heading. */
+  const focusNext = useRef<{ to: "link"; index: number } | { to: "heading" } | { to: "clear" } | null>(null);
+  const [said, setSaid] = useState("");
+  // A trailing no-break space makes a repeated message new text, so it is announced again.
+  const announce = (text: string) => setSaid((prev) => (prev === text ? text + String.fromCharCode(160) : text));
+  useEffect(() => {
+    const target = focusNext.current;
+    if (!target) return;
+    focusNext.current = null;
+    const heading = headingRef.current ?? emptyRef.current;
+    if (target.to === "clear") clearRef.current?.focus();
+    else if (target.to === "heading") heading?.focus();
+    else (rowLinks(listRef.current)[target.index] ?? heading)?.focus();
+  });
+  /** Remembers the acting row's position (its link or group toggle), to focus whatever takes its place. */
+  const keepRowFocus = (e: MouseEvent<HTMLElement>) => {
+    const own = e.currentTarget.closest("li")?.querySelector<HTMLElement>(".alert-link") ?? null;
+    focusNext.current = { to: "link", index: own ? rowLinks(listRef.current).indexOf(own) : -1 };
+  };
+  const dismiss = (e: MouseEvent<HTMLElement>, ids: readonly string[]) => {
+    keepRowFocus(e);
+    store.dismissMany(ids);
+    announce(ids.length === 1 ? "Alert dismissed" : `${ids.length} alerts dismissed`);
+  };
+  const markRead = (e: MouseEvent<HTMLElement>, ids: readonly string[]) => {
+    keepRowFocus(e);
+    store.markManyRead(ids);
+    announce(ids.length === 1 ? "Alert marked read" : `${ids.length} alerts marked read`);
+  };
   // Groups start folded. Expansion is remembered by member alert ids, so a
   // group stays open when one of its alerts is dismissed or it regroups.
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
@@ -54,10 +106,11 @@ export function AlertsPage() {
   const unread = unreadCount(alerts);
   const groups = useMemo(() => groupAlerts(alerts), [alerts]);
 
-  const describe = (a: StoredAlert) => {
-    if (a.sessionId) return sessionName.get(a.sessionId) ?? "A session that is no longer listed";
-    return hostName.get(a.hostId) ?? "A host that is no longer listed";
-  };
+  // Session names wait for the joined views, which also wait for the host list's first load.
+  const sessionsState: SourceState = sessions.data ? "ready" : sessions.sessions === "failed" ? "failed" : "loading";
+  const hostLabel = (id: string) => nameOf(hostName.get(id), sessions.hosts, "A host that is no longer listed");
+  const describe = (a: StoredAlert) =>
+    a.sessionId ? nameOf(sessionName.get(a.sessionId), sessionsState, "A session that is no longer listed") : hostLabel(a.hostId);
 
   const renderRow = (a: StoredAlert): ReactNode => (
     <li key={a.id} className={`alert-item ${KIND_TONE[a.kind]}${a.read ? "" : " unread"}`}>
@@ -76,11 +129,11 @@ export function AlertsPage() {
       </div>
       <div className="alert-actions">
         {!a.read && (
-          <button type="button" className="btn small ghost" onClick={() => store.markRead(a.id)}>
+          <button type="button" className="btn small ghost" onClick={(e) => markRead(e, [a.id])}>
             Mark read
           </button>
         )}
-        <button type="button" className="icon-btn" onClick={() => store.dismiss(a.id)} aria-label={`Dismiss alert: ${ALERT_LABEL[a.kind]}, ${describe(a)}`}>
+        <button type="button" className="icon-btn" onClick={(e) => dismiss(e, [a.id])} aria-label={`Dismiss alert: ${ALERT_LABEL[a.kind]}, ${describe(a)}`}>
           <IconClose />
         </button>
       </div>
@@ -98,18 +151,32 @@ export function AlertsPage() {
         <Link to="/settings">Notification settings</Link>
       </Notice>
 
+      <div className="sr-only" role="status" aria-live="polite">
+        {said}
+      </div>
+
       {alerts.length === 0 ? (
-        <EmptyState title="No alerts" icon={<IconBell />}>
+        <EmptyState title="No alerts" icon={<IconBell />} headingRef={emptyRef}>
           <p className="muted">When a session needs approval, is waiting for you, fails or finishes, it shows up here.</p>
         </EmptyState>
       ) : (
         <section className="section" aria-labelledby="h-alerts">
           <div className="section-head">
-            <h2 id="h-alerts">
+            <h2 id="h-alerts" ref={headingRef} tabIndex={-1}>
               {unread > 0 ? `${unread} unread` : "All read"} <span className="count">· {alerts.length} total</span>
             </h2>
             <div className="row">
-              <button type="button" className="btn small ghost" onClick={() => store.markAllRead()} disabled={unread === 0}>
+              <button
+                type="button"
+                className="btn small ghost"
+                onClick={() => {
+                  // The button disables itself; keep focus on the list's heading.
+                  focusNext.current = { to: "heading" };
+                  store.markAllRead();
+                  announce("All alerts marked read");
+                }}
+                disabled={unread === 0}
+              >
                 Mark all read
               </button>
               {confirmClear ? (
@@ -117,25 +184,36 @@ export function AlertsPage() {
                   <button
                     type="button"
                     className="btn small danger"
+                    // Replaces the focused "Clear all", so focus follows it.
+                    autoFocus
                     onClick={() => {
+                      focusNext.current = { to: "heading" };
                       store.clear();
                       setConfirmClear(false);
+                      announce("All alerts cleared");
                     }}
                   >
                     Confirm clear all
                   </button>
-                  <button type="button" className="btn small ghost" onClick={() => setConfirmClear(false)}>
+                  <button
+                    type="button"
+                    className="btn small ghost"
+                    onClick={() => {
+                      focusNext.current = { to: "clear" };
+                      setConfirmClear(false);
+                    }}
+                  >
                     Cancel
                   </button>
                 </>
               ) : (
-                <button type="button" className="btn small ghost" onClick={() => setConfirmClear(true)}>
+                <button type="button" className="btn small ghost" ref={clearRef} onClick={() => setConfirmClear(true)}>
                   Clear all
                 </button>
               )}
             </div>
           </div>
-          <ul className="alert-list">
+          <ul className="alert-list" ref={listRef}>
             {groups.map((g) => {
               const first = g.latest;
               if (g.alerts.length === 1) return renderRow(first);
@@ -143,7 +221,7 @@ export function AlertsPage() {
               const listId = `alert-group-${g.id.replace(/[^A-Za-z0-9-]/g, "-")}`;
               const ids = g.alerts.map((a) => a.id);
               const title = groupTitle(first.kind, g.alerts.length);
-              const host = hostName.get(first.hostId) ?? "A host that is no longer listed";
+              const host = hostLabel(first.hostId);
               return (
                 <li key={g.id} className={`alert-item alert-group ${KIND_TONE[first.kind]}${g.unread ? " unread" : ""}`}>
                   <span className="dot" aria-hidden="true" />
@@ -157,17 +235,19 @@ export function AlertsPage() {
                     </button>
                     <span className="alert-meta">
                       <span>Latest: {ALERT_LABEL[first.kind]}</span>
-                      <time dateTime={first.at}>· {relativeTime(first.at, now)}</time>
+                      <span>
+                        · <time dateTime={first.at}>{relativeTime(first.at, now)}</time>
+                      </span>
                       {first.isDemo && <DemoTag />}
                     </span>
                   </div>
                   <div className="alert-actions">
                     {g.unread > 0 && (
-                      <button type="button" className="btn small ghost" onClick={() => store.markManyRead(ids)}>
+                      <button type="button" className="btn small ghost" onClick={(e) => markRead(e, ids)}>
                         Mark {g.unread} read
                       </button>
                     )}
-                    <button type="button" className="icon-btn" onClick={() => store.dismissMany(ids)} aria-label={`Dismiss ${g.alerts.length} alerts: ${title}, ${host}`}>
+                    <button type="button" className="icon-btn" onClick={(e) => dismiss(e, ids)} aria-label={`Dismiss ${g.alerts.length} alerts: ${title}, ${host}`}>
                       <IconClose />
                     </button>
                   </div>

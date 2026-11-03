@@ -226,3 +226,70 @@ export function countsAsOf(connection: ConnectionState, refresh: RefreshFailure 
   if (connection.kind !== "current") return connection.dataFrom;
   return refresh?.dataFrom ?? null;
 }
+
+/**
+ * States only the host list can put a session in: Disconnected (its host
+ * stopped heartbeating) and Source not responding (its host can't read its
+ * sessions). Without the host list no session is counted there, so a "0" for
+ * them would be a confident claim nothing supports (spec 3.1).
+ */
+export const HOST_DERIVED_STATES: readonly DisplayStatus[] = ["disconnected", "source_unavailable"];
+
+/**
+ * The overview counts that are unknown rather than zero: the host-derived
+ * states while the host list is missing (failed, or not loaded yet). A host
+ * list whose refresh failed still counts: its counts are as of that fetch.
+ */
+export function unknownStateCounts({ hostsLoaded }: { hostsLoaded: boolean }): ReadonlySet<DisplayStatus> {
+  return new Set(hostsLoaded ? [] : HOST_DERIVED_STATES);
+}
+
+const UNKNOWN_STATE_SUBJECT: Partial<Record<DisplayStatus, string>> = {
+  disconnected: "which sessions are disconnected",
+  source_unavailable: "which sessions' hosts can't read them",
+};
+
+/**
+ * What an empty list filtered to an unknown state says instead of "nothing
+ * matches", which would be the confident claim its chip's "–" avoids. Null
+ * for a state whose count is known.
+ */
+export function unknownStateMessage(state: DisplayStatus | null, unknown: ReadonlySet<DisplayStatus>): string | null {
+  if (state === null || !unknown.has(state)) return null;
+  return `Host status isn't loaded, so Tavro can't tell ${UNKNOWN_STATE_SUBJECT[state] ?? "which sessions are in this state"} right now.`;
+}
+
+/**
+ * Navigation state a dashboard session link carries, so the session's back
+ * link returns to the same filtered list (spec 3.3). Only the search is
+ * stored; the path is always the dashboard's.
+ */
+export interface DashboardOrigin {
+  dashboardOrigin: { pathname: "/"; search: string };
+}
+
+export function dashboardOrigin(search: string): DashboardOrigin {
+  return { dashboardOrigin: { pathname: "/", search } };
+}
+
+/** Longer than any link the filters write (a project label is capped at 200). */
+export const DASHBOARD_ORIGIN_MAX_LENGTH = 2048;
+/** Empty, or "?" and a query with no fragment or whitespace. */
+const ORIGIN_SEARCH = /^(\?[^#\s]*)?$/;
+
+/**
+ * The dashboard link to go back to, read from untrusted navigation state
+ * (history entries outlive the code that wrote them). Only the dashboard
+ * path with a search string is accepted, so the result can never point
+ * anywhere else; null when the state isn't a valid origin.
+ */
+export function dashboardReturnPath(state: unknown): string | null {
+  if (typeof state !== "object" || state === null || !Object.hasOwn(state, "dashboardOrigin")) return null;
+  const origin: unknown = (state as { dashboardOrigin: unknown }).dashboardOrigin;
+  if (typeof origin !== "object" || origin === null) return null;
+  const { pathname, search } = origin as { pathname?: unknown; search?: unknown };
+  if (pathname !== "/" || typeof search !== "string") return null;
+  if (search.length > DASHBOARD_ORIGIN_MAX_LENGTH || !ORIGIN_SEARCH.test(search)) return null;
+  // A bare "?" is the dashboard with no filters.
+  return search.length > 1 ? `/${search}` : "/";
+}

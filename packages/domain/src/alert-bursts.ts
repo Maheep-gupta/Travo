@@ -1,4 +1,4 @@
-import { ALERT_LABEL, type AlertKind, type StoredAlert, type TavroAlert } from "./alerts.js";
+import { ALERT_LABEL, MAX_STORED_ALERTS, type AlertKind, type StoredAlert, type TavroAlert } from "./alerts.js";
 
 /**
  * Burst handling (spec 5.7, 16: "no notification storms"). A host outage that
@@ -91,8 +91,8 @@ export function summarizeAlerts(alerts: readonly Pick<TavroAlert, "kind" | "isDe
 
 /**
  * Everything notified since the user last looked at Tavro (the watcher resets
- * it when the tab becomes visible). Counts only, so a long hidden storm can't
- * make it grow.
+ * it when a tab becomes visible). Counts only, so a long hidden storm can't
+ * make it grow, and so it can be shared between tabs (parseNotificationBurst).
  */
 export interface NotificationBurst {
   summary: AlertSummary;
@@ -142,6 +142,47 @@ export function planNotifications(
     plan: { kind: "summary", summary, silent },
     burst: { summary, lastShownAt: now, lastAudibleAt: silent && previous ? previous.lastAudibleAt : now },
   };
+}
+
+/**
+ * A burst shared between tabs (through local storage) older than this is
+ * forgotten: it outlived the tabs and notifications it counted, so the next
+ * alert is news again rather than "37 new alerts" from yesterday.
+ */
+export const NOTIFICATION_BURST_MAX_AGE_MS = 60 * 60_000;
+
+/**
+ * The largest count a shared burst may hold: far more than an hour of real
+ * alerts (one stored list keeps MAX_STORED_ALERTS), so anything larger was
+ * written by something else and is rejected rather than shown.
+ */
+export const NOTIFICATION_BURST_MAX_COUNT = MAX_STORED_ALERTS * 10;
+
+const COUNT = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0 && v <= NOTIFICATION_BURST_MAX_COUNT;
+const TIME = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v > 0;
+
+/**
+ * Validates a burst read back from storage that other tabs share. Only counts
+ * per kind, a demo flag and two timestamps are accepted, never ids or names.
+ * A burst from the future (clock change) or older than `maxAgeMs` is null.
+ */
+export function parseNotificationBurst(raw: unknown, now: number, maxAgeMs = NOTIFICATION_BURST_MAX_AGE_MS): NotificationBurst | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const b = raw as Record<string, unknown>;
+  const s = b.summary;
+  if (typeof s !== "object" || s === null || !TIME(b.lastShownAt) || !TIME(b.lastAudibleAt)) return null;
+  const { counts: rawCounts, total, allDemo } = s as Record<string, unknown>;
+  if (typeof rawCounts !== "object" || rawCounts === null || !COUNT(total) || total === 0 || typeof allDemo !== "boolean") return null;
+  if (b.lastAudibleAt > b.lastShownAt || b.lastShownAt > now || now - b.lastShownAt > maxAgeMs) return null;
+  const counts: Partial<Record<AlertKind, number>> = {};
+  let sum = 0;
+  for (const [k, v] of Object.entries(rawCounts)) {
+    if (!Object.hasOwn(ALERT_LABEL, k) || !COUNT(v)) return null;
+    counts[k as AlertKind] = v;
+    sum += v;
+  }
+  if (sum !== total) return null;
+  return { summary: { counts, total, allDemo }, lastShownAt: b.lastShownAt, lastAudibleAt: b.lastAudibleAt };
 }
 
 /** Most urgent first, so a truncated notification still leads with what matters. */

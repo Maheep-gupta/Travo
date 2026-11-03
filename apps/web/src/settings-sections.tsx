@@ -205,6 +205,10 @@ export function PrivacyCard({ onCleared }: { onCleared: () => void }) {
       <ul className="settings-list">
         <li>Alert history: up to {MAX_STORED_ALERTS} recent alerts per account, as ids, kinds, times and read state. No names or session text.</li>
         <li>
+          While Tavro is in the background: how many alerts of each kind it has notified you about and when, so your open tabs make one sound per burst.
+          No ids or names. It is removed when you look at Tavro, and ignored after an hour without notifications.
+        </li>
+        <li>
           Preferences for this device: appearance and the system-notification switch
           {SESSION_NAMES_OPTION_APPROVED && <>, and for this account whether notifications may include names</>}. Alert types are saved with your data
           above, not here.

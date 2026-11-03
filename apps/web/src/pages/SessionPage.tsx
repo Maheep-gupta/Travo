@@ -1,19 +1,24 @@
+import { useMemo, useRef, type MouseEvent, type ReactNode } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
-import { Link, useParams } from "react-router";
-import type { Capability, SessionEventRow, SessionStatus } from "@mc/contracts";
+import { Link, useLocation, useNavigate, useParams } from "react-router";
+import type { Capability, SessionEventRow, SessionRow, SessionStatus } from "@mc/contracts";
 import {
   ALERT_LABEL,
   EMPTY_DASHBOARD_FILTER,
+  HEARTBEAT_INTERVAL_MS,
   PROVIDERS,
   STATUS_LABEL,
+  buildSessionViews,
+  dashboardReturnPath,
   hasCapability,
   pageAvailability,
   relativeTime,
   sessionAlerts,
   sourceState,
   untrustedHostReason,
+  type SessionView,
 } from "@mc/domain";
-import { useAlerts } from "../alerts-context.js";
+import { useAlertStore, useAlerts } from "../alerts-context.js";
 import { useApi } from "../api-context.js";
 import {
   ConnectivityBadge,
@@ -26,8 +31,8 @@ import {
   Spinner,
   StatusBadge,
 } from "../components.js";
-import { useNow, useSessionViews, userKey, useUserId } from "../hooks.js";
-import { IconArrowLeft, IconBell, IconCheck, IconFolder, IconHost, IconLock, IconSessions } from "../icons.js";
+import { useHosts, useNow, useSessionViews, useStatusClock, userKey, useUserId, type SessionViewsResult } from "../hooks.js";
+import { IconArrowLeft, IconBell, IconCheck, IconClose, IconFolder, IconHost, IconLock, IconSessions } from "../icons.js";
 import { dashboardFilterParams } from "../view-model.js";
 import { FreshnessNote } from "./DashboardPage.js";
 
@@ -62,8 +67,12 @@ export function SessionPage() {
   const userId = useUserId();
   const now = useNow();
   const sessions = useSessionViews();
-  const session = sessions.data?.find((s) => s.id === id);
+  const listed = sessions.data?.find((s) => s.id === id);
+  const unlisted = useUnlistedSession(id, sessions, listed !== undefined);
+  const session = listed ?? unlisted.view;
   const alerts = useAlerts();
+  const store = useAlertStore();
+  const alertsHeading = useRef<HTMLHeadingElement>(null);
 
   // Also fetched when the session list failed: the history is still worth showing on its own.
   const events = useQuery({
@@ -96,6 +105,7 @@ export function SessionPage() {
   if (availability.kind === "failed") {
     return (
       <main className="page">
+        <BackLink />
         <h1 className="sr-only">Session</h1>
         <ErrorState
           error={sessions.sessionsError ?? new Error()}
@@ -110,10 +120,7 @@ export function SessionPage() {
   if (availability.kind === "main_missing") {
     return (
       <main className="page">
-        <Link to="/" className="back">
-          <IconArrowLeft />
-          Sessions
-        </Link>
+        <BackLink />
         <h1 className="sr-only">Session</h1>
         <MissingDataNotice title="Session details couldn't be loaded." error={sessions.sessionsError} onRetry={sessions.refetchSessions}>
           {/* The id isn't confirmed: the database answers an id that isn't yours with an empty history, not an error. */}
@@ -124,14 +131,30 @@ export function SessionPage() {
     );
   }
   if (!session) {
+    if (unlisted.lookingUp && unlisted.query.data === undefined) {
+      return (
+        <main className="page">
+          <BackLink />
+          <h1 className="sr-only">Session</h1>
+          {unlisted.query.error ? (
+            <ErrorState error={unlisted.query.error} onRetry={() => void unlisted.query.refetch()} />
+          ) : (
+            <SessionListSkeleton count={3} label="Loading session…" />
+          )}
+        </main>
+      );
+    }
     return (
       <main className="page">
         <h1 className="sr-only">Session</h1>
         <EmptyState title="Session not found">
-          <p>It may have ended and been removed, or it belongs to another account.</p>
-          <Link to="/" className="btn">
-            Back to sessions
-          </Link>
+          {unlisted.lookingUp ? (
+            // The list on screen is incomplete, so not being in it says nothing; neither does an empty lookup, which is all RLS gives an id that isn't yours.
+            <p>Tavro couldn't find this session in the sessions it loaded, and looking it up directly found nothing either. It may have ended and been removed.</p>
+          ) : (
+            <p>It may have ended and been removed, or it belongs to another account.</p>
+          )}
+          <BackLink className="btn">Back to sessions</BackLink>
         </EmptyState>
       </main>
     );
@@ -146,15 +169,27 @@ export function SessionPage() {
   const untrusted = hostsMissing || session.displayStatus === "disconnected" || session.displayStatus === "source_unavailable";
   const reasonText = untrusted ? null : session.status_reason;
   const related = sessionAlerts(alerts, session.id);
+  const unreadIds = related.filter((a) => !a.read).map((a) => a.id);
+  // Read and dismissed only on request: opening the page marks nothing read. Focus moves
+  // before the store changes, so it never falls back to the page when a button goes away.
+  const markRead = (e: MouseEvent<HTMLButtonElement>, alertId: string) => {
+    e.currentTarget.closest("li")?.querySelector<HTMLButtonElement>(".ra-dismiss")?.focus();
+    store.markRead(alertId);
+  };
+  const dismiss = (alertId: string) => {
+    alertsHeading.current?.focus();
+    store.dismiss(alertId);
+  };
+  const markAllRead = () => {
+    alertsHeading.current?.focus();
+    store.markManyRead(unreadIds);
+  };
   const dashboardLink = (patch: { host?: string; provider?: typeof session.provider }) =>
     `/?${dashboardFilterParams({ ...EMPTY_DASHBOARD_FILTER, ...patch }).toString()}`;
 
   return (
     <main className="page">
-      <Link to="/" className="back">
-        <IconArrowLeft />
-        Sessions
-      </Link>
+      <BackLink />
 
       <header className={`detail-head st-${session.displayStatus}`}>
         <div className="row">
@@ -205,6 +240,10 @@ export function SessionPage() {
         </MissingDataNotice>
       )}
       <RefreshFailedNotice failure={sessions.refresh} now={now} onRetry={sessions.refetch} />
+      {/* Looked up on its own (not in the incomplete list): its own refresh can fail too; it then ages like the list's. */}
+      {!listed && unlisted.query.isError && (
+        <MissingDataNotice title="Couldn't refresh this session." error={unlisted.query.error} onRetry={() => void unlisted.query.refetch()} />
+      )}
 
       <div className="detail-grid">
         <div className="detail-main">
@@ -212,21 +251,42 @@ export function SessionPage() {
 
           <section className="card" aria-labelledby="h-alerts">
             <div className="card-title">
-              <h2 id="h-alerts">Alerts for this session</h2>
+              <h2 id="h-alerts" ref={alertsHeading} tabIndex={-1}>
+                Alerts for this session
+              </h2>
+              {unreadIds.length > 0 && (
+                <button type="button" className="btn small ghost ra-mark-all" onClick={markAllRead}>
+                  Mark all read
+                </button>
+              )}
               <Link to="/alerts">All alerts</Link>
             </div>
             {related.length ? (
               <ul className="related-alerts">
-                {related.map((a) => (
-                  <li key={a.id} className={a.read ? undefined : "unread"}>
-                    <span className="ra-kind">{ALERT_LABEL[a.kind]}</span>
-                    {!a.read && <span className="ra-unread">Unread</span>}
-                    {a.isDemo && <DemoTag />}
-                    <time dateTime={a.at} title={formatTime(a.at)}>
-                      {relativeTime(a.at, now)}
-                    </time>
-                  </li>
-                ))}
+                {related.map((a) => {
+                  // Kind and time tell same-kind alerts apart for screen readers.
+                  const name = `${ALERT_LABEL[a.kind]}, ${relativeTime(a.at, now)}`;
+                  return (
+                    <li key={a.id} className={a.read ? undefined : "unread"}>
+                      <span className="ra-kind">{ALERT_LABEL[a.kind]}</span>
+                      {!a.read && <span className="ra-unread">Unread</span>}
+                      {a.isDemo && <DemoTag />}
+                      <time dateTime={a.at} title={formatTime(a.at)}>
+                        {relativeTime(a.at, now)}
+                      </time>
+                      <span className="ra-actions">
+                        {!a.read && (
+                          <button type="button" className="btn small ghost" aria-label={`Mark read: ${name}`} onClick={(e) => markRead(e, a.id)}>
+                            Mark read
+                          </button>
+                        )}
+                        <button type="button" className="icon-btn ra-dismiss" aria-label={`Dismiss alert: ${name}`} onClick={() => dismiss(a.id)}>
+                          <IconClose />
+                        </button>
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
             ) : (
               <p className="muted related-empty">
@@ -375,6 +435,82 @@ export function SessionPage() {
       </div>
     </main>
   );
+}
+
+/**
+ * "Sessions": back to the dashboard list this session was opened from, filters
+ * included (spec 3.3), else the unfiltered dashboard. The href is always real,
+ * so new tabs and direct links work. When the session was opened from that
+ * list in this tab, a plain click steps back to it instead of pushing it again:
+ * Back afterwards doesn't loop to the session, and the browser restores the
+ * list's scroll position (route-focus keeps it on POP).
+ *
+ * Only the first click steps back: a fast double tap would otherwise step back
+ * twice, past the list. Whether the entry before this one still exists can't
+ * be told reliably from a page, so there is no fallback for history that was
+ * replaced under it; the href stays correct for every other way of opening it.
+ */
+function BackLink({ className = "back", children }: { className?: string; children?: ReactNode }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  // The entry a step back was already taken from; the page normally unmounts before a second click.
+  const steppedBackFrom = useRef<string | null>(null);
+  const returnTo = dashboardReturnPath(location.state);
+  const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
+    // Only a dashboard card link writes the origin, so the entry before this one is that list. "default": no earlier in-app entry.
+    if (returnTo === null || location.key === "default") return;
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    if (steppedBackFrom.current === location.key) return;
+    steppedBackFrom.current = location.key;
+    void navigate(-1);
+  };
+  return (
+    <Link to={returnTo ?? "/"} className={className} onClick={onClick}>
+      {children ?? (
+        <>
+          <IconArrowLeft />
+          Sessions
+        </>
+      )}
+    </Link>
+  );
+}
+
+/**
+ * A session the loaded list doesn't include, looked up on its own while that
+ * list is incomplete (cut at the limit, or rows left out): only a complete
+ * list settles that a session isn't there. Built like the list's sessions, so
+ * a host that is missing (or a host list that is) leaves it untrusted.
+ */
+function useUnlistedSession(id: string, views: SessionViewsResult, listed: boolean): {
+  /** The lookup is in use: the list is on screen, incomplete, and lacks this id. */
+  lookingUp: boolean;
+  query: UseQueryResult<SessionRow | null>;
+  view: SessionView | undefined;
+} {
+  const api = useApi();
+  const userId = useUserId();
+  const hosts = useHosts();
+  // The clock the list's views are judged by.
+  const now = useStatusClock();
+  const lookingUp = views.data !== undefined && !listed && (views.truncated || views.dropped > 0);
+  // Not a status list (see isStatusQuery); polled like one while it stands in for the list.
+  const query = useQuery({
+    queryKey: userKey(api, userId, "sessions", "detail", id),
+    queryFn: () => api.getSession(id),
+    enabled: lookingUp,
+    refetchInterval: lookingUp ? HEARTBEAT_INTERVAL_MS : false,
+  });
+  const row = lookingUp ? query.data : undefined;
+  const view = useMemo(
+    () =>
+      row
+        ? buildSessionViews([row], hosts.data ?? null, now, { sync: views.sync, sessionsFetchedAt: query.dataUpdatedAt, hostsFetchedAt: hosts.dataUpdatedAt })[0]
+        : undefined,
+    [row, hosts.data, hosts.dataUpdatedAt, now, views.sync, query.dataUpdatedAt],
+  );
+  return { lookingUp, query, view };
 }
 
 /** The session's recorded status changes; shown on its own when the session list fails. */

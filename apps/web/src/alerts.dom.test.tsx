@@ -62,6 +62,10 @@ class FakeApi implements TavroApi {
   readonly kind = "demo" as const;
   sessions: SessionRow[] = [sessionRow(S1, "Fix login", "running"), sessionRow(S2, "Refactor parser", "approval_required")];
   failHosts = false;
+  failSessions = false;
+  /** Lists that never answer, so their first load stays in progress. */
+  holdSessions = false;
+  holdHosts = false;
   failPrefs = false;
   /** Whose hosts the backend answers with (another tab's sign-in swaps the shared token). */
   hostsOwner = USER.id;
@@ -91,6 +95,8 @@ class FakeApi implements TavroApi {
     for (const cb of this.authListeners) cb(user);
   }
   listSessions(): Promise<SessionRow[]> {
+    if (this.holdSessions) return new Promise(() => undefined);
+    if (this.failSessions) return Promise.reject(new Error("sessions unavailable"));
     return Promise.resolve(this.sessions.map((s) => ({ ...s })));
   }
   getSession(id: string): Promise<SessionRow | null> {
@@ -103,6 +109,7 @@ class FakeApi implements TavroApi {
     return Promise.resolve([]);
   }
   listHosts(): Promise<HostRow[]> {
+    if (this.holdHosts) return new Promise(() => undefined);
     if (this.failHosts) return Promise.reject(new Error("hosts unavailable"));
     // Seen just now, so the host counts as online whenever the list is fetched.
     const now = new Date().toISOString();
@@ -297,6 +304,275 @@ describe("AlertWatcher (via AlertsProvider)", () => {
       vi.unstubAllGlobals();
       window.localStorage.removeItem("tavro.systemNotifications.v1");
     }
+  });
+
+  // G32 / QA LOW-3: the user's hidden tabs share one burst through storage.
+  describe("bursts across tabs", () => {
+    const burstKey = new AlertStore(window.localStorage, storageKey).burstKey;
+    let created: { title: string; options?: NotificationOptions; close: () => void }[];
+    let visibility: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      created = [];
+      const Fake = Object.assign(
+        function (this: unknown, title: string, options?: NotificationOptions) {
+          const n = { title, options, tag: options?.tag, close: vi.fn() };
+          created.push(n);
+          return n;
+        },
+        { permission: "granted" as NotificationPermission, requestPermission: () => Promise.resolve("granted" as NotificationPermission) },
+      );
+      vi.stubGlobal("Notification", Fake);
+      vi.stubGlobal("isSecureContext", true);
+      visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      window.localStorage.setItem("tavro.systemNotifications.v1", "on");
+    });
+
+    afterEach(() => {
+      visibility.mockRestore();
+      vi.unstubAllGlobals();
+    });
+
+    /** What another tab leaves behind after notifying one completion just now. */
+    const otherTabsSingle = () => {
+      const now = Date.now();
+      return JSON.stringify({ summary: { counts: { completed: 1 }, total: 1, allDemo: true }, lastShownAt: now, lastAudibleAt: now });
+    };
+
+    it("continues another tab's burst, so more of the same stays silent", async () => {
+      await initialLoad();
+      window.localStorage.setItem(burstKey, otherTabsSingle());
+      api.sessions = [sessionRow(S1, "Fix login", "completed", T1), api.sessions[1] as SessionRow];
+      await refetch(["sessions"], (b, n) => n.s > b.s);
+      // Per tab, this would have been a second audible single.
+      expect(created.map((c) => [c.title, c.options?.tag, c.options?.silent])).toEqual([["Tavro demo · 2 new alerts", "tavro:summary", true]]);
+      const stored = JSON.parse(window.localStorage.getItem(burstKey) ?? "null") as { summary: { total: number } };
+      expect(stored.summary.total).toBe(2);
+      // Counts, kinds and times only.
+      expect(window.localStorage.getItem(burstKey)).not.toContain(S1);
+    });
+
+    it("still sounds for an approval that arrives in another tab's burst", async () => {
+      await initialLoad();
+      window.localStorage.setItem(burstKey, otherTabsSingle());
+      api.sessions = [sessionRow(S1, "Fix login", "approval_required", T1), api.sessions[1] as SessionRow];
+      await refetch(["sessions"], (b, n) => n.s > b.s);
+      expect(created.map((c) => [c.options?.tag, c.options?.silent])).toEqual([["tavro:summary", false]]);
+    });
+
+    it("closes its own single when another tab's summary counts it, and ends the burst for all tabs once looked at", async () => {
+      await initialLoad();
+      api.sessions = [sessionRow(S1, "Fix login", "failed", T1), api.sessions[1] as SessionRow];
+      await refetch(["sessions"], (b, n) => n.s > b.s);
+      const [single] = created;
+      expect(single?.options?.tag).toBe("tavro:failed");
+
+      const now = Date.now();
+      const summary = JSON.stringify({ summary: { counts: { failed: 1, completed: 1 }, total: 2, allDemo: true }, lastShownAt: now, lastAudibleAt: now });
+      act(() => window.dispatchEvent(new StorageEvent("storage", { key: burstKey, newValue: summary })));
+      expect(single?.close).toHaveBeenCalled();
+
+      // Looking at this tab ends the burst in storage too, so the next alert anywhere is news again.
+      window.localStorage.setItem(burstKey, summary);
+      visibility.mockReturnValue("visible");
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      expect(window.localStorage.getItem(burstKey)).toBeNull();
+    });
+
+    it("closes its notifications when another tab ends the burst, but not for an unreadable or expired value", async () => {
+      await initialLoad();
+      api.sessions = [sessionRow(S1, "Fix login", "failed", T1), api.sessions[1] as SessionRow];
+      await refetch(["sessions"], (b, n) => n.s > b.s);
+      const [single] = created;
+      expect(single?.options?.tag).toBe("tavro:failed");
+
+      const old = Date.now() - 2 * 60 * 60_000;
+      for (const garbage of ["{not json", '{"summary":null}', JSON.stringify({ summary: { counts: { failed: 2 }, total: 2, allDemo: true }, lastShownAt: old, lastAudibleAt: old })]) {
+        act(() => window.dispatchEvent(new StorageEvent("storage", { key: burstKey, newValue: garbage })));
+      }
+      expect(single?.close).not.toHaveBeenCalled();
+
+      // A removal is the user looking at Tavro in another tab.
+      act(() => window.dispatchEvent(new StorageEvent("storage", { key: burstKey, newValue: null })));
+      expect(single?.close).toHaveBeenCalled();
+    });
+
+    it("records nothing in the shared burst when the browser refuses to show the notification", async () => {
+      vi.stubGlobal(
+        "Notification",
+        Object.assign(
+          function () {
+            throw new TypeError("Illegal constructor");
+          },
+          { permission: "granted" as NotificationPermission, requestPermission: () => Promise.resolve("granted" as NotificationPermission) },
+        ),
+      );
+      await initialLoad();
+      api.sessions = [sessionRow(S1, "Fix login", "failed", T1), sessionRow(S2, "Refactor parser", "completed", T1)];
+      await refetch(["sessions"], (b, n) => n.s > b.s);
+      expect(alertIds()).toHaveLength(2);
+      // Another tab would otherwise close its own notifications for a summary nobody sees.
+      expect(window.localStorage.getItem(burstKey)).toBeNull();
+    });
+  });
+
+  it("ends a stored burst when it opens (or reloads) while visible", async () => {
+    const key = new AlertStore(window.localStorage, storageKey).burstKey;
+    const now = Date.now();
+    window.localStorage.setItem(key, JSON.stringify({ summary: { counts: { completed: 3 }, total: 3, allDemo: true }, lastShownAt: now, lastAudibleAt: now }));
+    await initialLoad();
+    expect(window.localStorage.getItem(key)).toBeNull();
+  });
+
+  // Two of the user's tabs, each with its own watcher, backend and query cache,
+  // sharing one local storage. jsdom has one window and one document, so each
+  // tab's storage and visibility listeners are captured as it mounts, and
+  // storage events are delivered by hand to the other tab only, as a browser does.
+  describe("two tabs sharing one burst (integration)", () => {
+    interface Tab {
+      name: string;
+      api: FakeApi;
+      client: QueryClient;
+      container: HTMLElement;
+      storage: Set<(e: StorageEvent) => void>;
+      visibility: Set<() => void>;
+    }
+    const burstKey = new AlertStore(window.localStorage, storageKey).burstKey;
+    let tabs: Tab[];
+    let mounting: Tab | null;
+    let acting: Tab | null;
+    let created: { tab: string | undefined; tag: string | undefined; silent: boolean | null | undefined; close: () => void }[];
+    let visibility: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      tabs = [];
+      mounting = null;
+      acting = null;
+      created = [];
+      const Fake = Object.assign(
+        function (this: unknown, _title: string, options?: NotificationOptions) {
+          const n = { tab: acting?.name, tag: options?.tag, silent: options?.silent, close: vi.fn() };
+          created.push(n);
+          return n;
+        },
+        { permission: "granted" as NotificationPermission, requestPermission: () => Promise.resolve("granted" as NotificationPermission) },
+      );
+      vi.stubGlobal("Notification", Fake);
+      vi.stubGlobal("isSecureContext", true);
+      visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      window.localStorage.setItem("tavro.systemNotifications.v1", "on");
+      const addWindow = window.addEventListener.bind(window);
+      vi.spyOn(window, "addEventListener").mockImplementation(((type: string, listener: EventListener, options?: AddEventListenerOptions) => {
+        if (type === "storage" && mounting) mounting.storage.add(listener as (e: StorageEvent) => void);
+        else addWindow(type, listener, options);
+      }) as typeof window.addEventListener);
+      const addDocument = document.addEventListener.bind(document);
+      vi.spyOn(document, "addEventListener").mockImplementation(((type: string, listener: EventListener, options?: AddEventListenerOptions) => {
+        if (type === "visibilitychange" && mounting) mounting.visibility.add(listener as () => void);
+        else addDocument(type, listener, options);
+      }) as typeof document.addEventListener);
+    });
+
+    afterEach(() => {
+      for (const t of tabs) t.client.clear();
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    });
+
+    const probe = (tab: Tab): Counts => JSON.parse(within(tab.container).getByTestId("probe").textContent || "{}") as Counts;
+
+    async function openTab(name: string): Promise<Tab> {
+      const tab: Tab = { name, api: new FakeApi(), client: new QueryClient({ defaultOptions: { queries: { retry: false } } }), container: document.createElement("div"), storage: new Set(), visibility: new Set() };
+      document.body.append(tab.container);
+      backend.api = tab.api;
+      mounting = tab;
+      render(
+        <QueryClientProvider client={tab.client}>
+          <ApiProvider>
+            <MemoryRouter>
+              <ApiReady>
+                <AlertsProvider userId={USER.id}>
+                  <QueryProbe />
+                </AlertsProvider>
+              </ApiReady>
+            </MemoryRouter>
+          </ApiProvider>
+        </QueryClientProvider>,
+        { container: tab.container },
+      );
+      await waitFor(() => expect(probe(tab)).toMatchObject({ s: 1, h: 1, p: 1 }), { timeout: 5000 });
+      mounting = null;
+      tabs.push(tab);
+      return tab;
+    }
+
+    /** Delivers a change to shared storage to every tab but the one that made it. */
+    function deliver(from: Tab, before: string | null): void {
+      const after = window.localStorage.getItem(burstKey);
+      if (after === before) return;
+      const event = new StorageEvent("storage", { key: burstKey, oldValue: before, newValue: after });
+      for (const t of tabs) if (t !== from) act(() => t.storage.forEach((l) => l(event)));
+    }
+
+    /** One tab's sessions poll finds new data. */
+    async function poll(tab: Tab, sessions: SessionRow[]): Promise<void> {
+      const before = window.localStorage.getItem(burstKey);
+      const was = probe(tab).s;
+      tab.api.sessions = sessions;
+      acting = tab;
+      await act(() => tab.client.invalidateQueries({ queryKey: ["sessions"] }));
+      await waitFor(() => expect(probe(tab).s).toBeGreaterThan(was), { timeout: 5000 });
+      acting = null;
+      deliver(tab, before);
+    }
+
+    const audible = () => created.filter((c) => c.silent !== true);
+    const T2 = "2026-10-29T11:01:00.000Z";
+
+    it("makes one sound for a storm split across both tabs", async () => {
+      const [one, two] = [await openTab("one"), await openTab("two")];
+      await poll(one, [sessionRow(S1, "Fix login", "completed", T1), sessionRow(S2, "Refactor parser", "approval_required")]);
+      await poll(two, [sessionRow(S1, "Fix login", "running"), sessionRow(S2, "Refactor parser", "completed", T1)]);
+      await poll(one, [sessionRow(S1, "Fix login", "running", T2), sessionRow(S2, "Refactor parser", "approval_required")]);
+      await poll(one, [sessionRow(S1, "Fix login", "completed", T2), sessionRow(S2, "Refactor parser", "approval_required")]);
+      expect(created.map((c) => [c.tab, c.tag, c.silent])).toEqual([
+        ["one", "tavro:completed", undefined],
+        ["two", "tavro:summary", true],
+        ["one", "tavro:summary", true],
+      ]);
+      expect(audible()).toHaveLength(1);
+      expect((JSON.parse(window.localStorage.getItem(burstKey) ?? "null") as { summary: { total: number } }).summary.total).toBe(3);
+    });
+
+    it("still sounds for an approval that arrives in the other tab", async () => {
+      const [one, two] = [await openTab("one"), await openTab("two")];
+      await poll(one, [sessionRow(S1, "Fix login", "completed", T1), sessionRow(S2, "Refactor parser", "approval_required")]);
+      await poll(two, [sessionRow(S1, "Fix login", "approval_required", T1), sessionRow(S2, "Refactor parser", "approval_required")]);
+      expect(created.map((c) => [c.tab, c.tag, c.silent])).toEqual([
+        ["one", "tavro:completed", undefined],
+        ["two", "tavro:summary", false],
+      ]);
+      expect(audible()).toHaveLength(2);
+    });
+
+    it("ends the burst for both tabs when the first becomes visible", async () => {
+      const [one, two] = [await openTab("one"), await openTab("two")];
+      await poll(one, [sessionRow(S1, "Fix login", "completed", T1), sessionRow(S2, "Refactor parser", "approval_required")]);
+      const [single] = created;
+
+      // Only tab one is looked at; tab two hears of it through storage.
+      const before = window.localStorage.getItem(burstKey);
+      visibility.mockReturnValue("visible");
+      act(() => one.visibility.forEach((l) => l()));
+      visibility.mockReturnValue("hidden");
+      expect(window.localStorage.getItem(burstKey)).toBeNull();
+      deliver(one, before);
+      expect(single?.close).toHaveBeenCalled();
+
+      // Tab two's next alert is news again: an audible single, not "2 new alerts".
+      await poll(two, [sessionRow(S1, "Fix login", "running"), sessionRow(S2, "Refactor parser", "completed", T1)]);
+      expect(created.slice(1).map((c) => [c.tab, c.tag, c.silent])).toEqual([["two", "tavro:completed", undefined]]);
+    });
   });
 
   it("pauses detection while preferences failed to load, without losing the change", async () => {
@@ -514,6 +790,126 @@ describe("AlertsPage", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Dismiss 3 alerts: Completed · 3 alerts, Test laptop" }));
       expect(storedAlerts().map((a) => a.id)).toEqual([approval.id]);
+    });
+  });
+
+  // Accessibility review: focus never drops to <body> when the focused control
+  // goes away (WCAG 2.4.3), and actions are announced.
+  describe("focus and announcements", () => {
+    const said = () => document.querySelector("main [role='status'].sr-only")?.textContent ?? "";
+    const press = (el: HTMLElement) => {
+      el.focus();
+      fireEvent.click(el);
+    };
+    const link = (name: RegExp) => screen.getByRole("link", { name });
+
+    it("moves focus to the next row after a dismiss, or to the list heading when there is none", async () => {
+      await renderPrefilled();
+      press(screen.getByRole("button", { name: "Dismiss alert: Needs approval, Refactor parser" }));
+      expect(document.activeElement).toBe(link(/Host disconnected/));
+      expect(said()).toBe("Alert dismissed");
+
+      press(screen.getByRole("button", { name: "Dismiss alert: Failed, Fix login" }));
+      expect(document.activeElement).toBe(screen.getByRole("heading", { level: 2, name: /total/ }));
+      // The same message again is still new text for screen readers.
+      expect(said().trim()).toBe("Alert dismissed");
+      expect(said()).not.toBe("Alert dismissed");
+
+      press(screen.getByRole("button", { name: "Dismiss alert: Host disconnected, Test laptop" }));
+      expect(document.activeElement).toBe(screen.getByRole("heading", { name: "No alerts" }));
+    });
+
+    it("keeps focus on the row when Mark read removes its button, and on the heading after Mark all read", async () => {
+      await renderPrefilled();
+      press(screen.getAllByRole("button", { name: "Mark read" })[0] as HTMLElement);
+      expect(document.activeElement).toBe(link(/Needs approval/));
+      expect(said()).toBe("Alert marked read");
+
+      press(screen.getByRole("button", { name: "Mark all read" }));
+      expect(document.activeElement).toBe(screen.getByRole("heading", { level: 2, name: /All read/ }));
+      expect(said()).toBe("All alerts marked read");
+    });
+
+    it("moves focus through Clear all, Cancel and Confirm", async () => {
+      await renderPrefilled();
+      press(screen.getByRole("button", { name: "Clear all" }));
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Confirm clear all" }));
+      press(screen.getByRole("button", { name: "Cancel" }));
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Clear all" }));
+
+      press(screen.getByRole("button", { name: "Clear all" }));
+      press(screen.getByRole("button", { name: "Confirm clear all" }));
+      expect(document.activeElement).toBe(screen.getByRole("heading", { name: "No alerts" }));
+      expect(said()).toBe("All alerts cleared");
+    });
+
+    it("moves focus past a dismissed group, and keeps the separator out of its time element", async () => {
+      prefillAlerts([
+        { id: "d1", kind: "completed", sessionId: S1, hostId: HOST, at: "2026-10-29T12:01:00.000Z", isDemo: true },
+        { id: "d2", kind: "completed", sessionId: S2, hostId: HOST, at: "2026-10-29T12:02:00.000Z", isDemo: true },
+        approval,
+      ]);
+      renderPage();
+      await screen.findByRole("link", { name: /Needs approval.*Refactor parser/ }, { timeout: 5000 });
+      const group = screen.getByRole("button", { name: /^Completed · 2 alerts/ }).closest("li") as HTMLElement;
+      expect(group.querySelector("time")?.textContent).not.toContain("·");
+
+      press(screen.getByRole("button", { name: "Mark 2 read" }));
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: /^Completed · 2 alerts/ }));
+      expect(said()).toBe("2 alerts marked read");
+
+      press(screen.getByRole("button", { name: /^Dismiss 2 alerts/ }));
+      expect(document.activeElement).toBe(link(/Needs approval/));
+      expect(said()).toBe("2 alerts dismissed");
+    });
+  });
+
+  // G26 (spec 5.5): "no longer listed" only once the list loaded without it.
+  describe("names while lists load or fail", () => {
+    const names = () => alertLinks().map((l) => l.querySelector(".alert-name")?.textContent);
+
+    it("says a name is loading while its list is on its first load", async () => {
+      api.holdSessions = true;
+      api.holdHosts = true;
+      prefillAlerts([failed, hostDown]);
+      renderPage();
+      await screen.findByRole("heading", { level: 2, name: /total/ }, { timeout: 5000 });
+      expect(names()).toEqual(["Loading name…", "Loading name…"]);
+      expect(screen.queryByText(/no longer listed/)).toBeNull();
+    });
+
+    it("keeps session names loading until the host list has loaded too (the views wait for it)", async () => {
+      api.holdHosts = true;
+      prefillAlerts([failed]);
+      renderPage();
+      await screen.findByRole("heading", { level: 2, name: /total/ }, { timeout: 5000 });
+      // Give the session list time to arrive; its name still waits for the hosts.
+      await act(() => new Promise((r) => setTimeout(r, 50)));
+      expect(names()).toEqual(["Loading name…"]);
+    });
+
+    it("says a name is unavailable when its list failed to load", async () => {
+      api.failSessions = true;
+      api.failHosts = true;
+      prefillAlerts([failed, hostDown]);
+      renderPage();
+      await waitFor(() => expect(names()).toEqual(["Name unavailable", "Name unavailable"]), { timeout: 5000 });
+      expect(screen.getByRole("button", { name: "Dismiss alert: Failed, Name unavailable" })).toBeTruthy();
+    });
+
+    it("resolves session names from a loaded session list even when the host list failed", async () => {
+      api.failHosts = true;
+      prefillAlerts([failed, hostDown]);
+      renderPage();
+      await waitFor(() => expect(names()).toEqual(["Name unavailable", "Fix login"]), { timeout: 5000 });
+    });
+
+    it("says no longer listed only when the loaded list lacks the id", async () => {
+      const goneSession: TavroAlert = { ...failed, id: "a-gone", sessionId: "00000000-0000-4000-8000-000000000199" };
+      const goneHost: TavroAlert = { ...hostDown, id: "a-gone-host", hostId: "00000000-0000-4000-8000-0000000000b9", at: "2026-10-29T09:00:00.000Z" };
+      prefillAlerts([goneSession, goneHost]);
+      renderPage();
+      await waitFor(() => expect(names()).toEqual(["A session that is no longer listed", "A host that is no longer listed"]), { timeout: 5000 });
     });
   });
 

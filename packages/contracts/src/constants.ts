@@ -17,6 +17,12 @@ export const MAX_SCHEMA_VERSION = 3;
  */
 export const OBSERVED_AT_MAX_SKEW_MS = 5 * 60_000;
 
+/**
+ * The most sessions one session list returns: the most recently active are
+ * kept, and the client says when more exist (spec 3.1, 10.2).
+ */
+export const SESSION_LIST_LIMIT = 500;
+
 export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
   on_waiting_for_input: true,
   on_approval_required: true,

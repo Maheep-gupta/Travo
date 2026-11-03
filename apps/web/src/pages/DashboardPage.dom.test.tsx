@@ -10,14 +10,21 @@ import { ApiProvider, useApiContext } from "../api-context.js";
 import { AlertsProvider } from "../alerts-context.js";
 import { alertStorageKey } from "../alert-store.js";
 import { DashboardPage } from "./DashboardPage.js";
+import { SessionPage } from "./SessionPage.js";
+
+/** Set by a test to make the host list fail, as a down hosts service would. */
+const fail = vi.hoisted(() => ({ hosts: false }));
 
 vi.mock("../platform.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../platform.js")>();
-  const { createDemoApi } = await import("@mc/api-client/demo");
+  const { ApiError, createDemoApi } = await import("@mc/api-client/demo");
   return {
     ...actual,
     loadBackendChoice: () => ({ kind: "demo" }),
-    createApi: () => Promise.resolve(createDemoApi({ tickMs: 0, sourceOutageMs: 0 })),
+    createApi: () => {
+      const api = createDemoApi({ tickMs: 0, sourceOutageMs: 0 });
+      return Promise.resolve({ ...api, listHosts: () => (fail.hosts ? Promise.reject(new ApiError("The hosts service is down.", "unavailable")) : api.listHosts()) });
+    },
   };
 });
 
@@ -27,6 +34,7 @@ let queryClient: QueryClient;
 afterEach(() => {
   queryClient.clear();
   window.localStorage.clear();
+  fail.hosts = false;
 });
 
 function ApiReady({ children }: { children: ReactNode }) {
@@ -36,7 +44,13 @@ function ApiReady({ children }: { children: ReactNode }) {
 }
 
 function LocationProbe() {
-  return <output data-testid="search">{useLocation().search}</output>;
+  const { pathname, search } = useLocation();
+  return (
+    <>
+      <output data-testid="path">{pathname}</output>
+      <output data-testid="search">{search}</output>
+    </>
+  );
 }
 
 /** Stands in for the browser's Back button. */
@@ -59,6 +73,7 @@ async function renderDashboard(route = "/") {
           <ApiReady>
             <Routes>
               <Route path="/" element={<DashboardPage />} />
+              <Route path="/sessions/:id" element={<SessionPage />} />
             </Routes>
             <LocationProbe />
             <BackButton />
@@ -311,5 +326,87 @@ describe("DashboardPage unread alerts (G14)", () => {
     ]);
     await waitFor(() => expect(screen.queryByText(/unread alert/)).toBeNull());
     expect(document.querySelector(".has-unread")).toBeNull();
+  });
+});
+
+describe("DashboardPage counts while host status is missing (G22)", () => {
+  const chip = (state: string) => document.querySelector(`.state-chip.st-${state}`) as HTMLElement;
+
+  it("shows Disconnected and Source not responding as unknown, not 0, and real counts once hosts load", async () => {
+    fail.hosts = true;
+    await renderDashboard();
+    for (const [state, label] of [
+      ["disconnected", "Disconnected"],
+      ["source_unavailable", "Source not responding"],
+    ] as const) {
+      expect(screen.getByRole("button", { name: `${label}: unknown while host status isn't loaded` }), label).toBeTruthy();
+      expect(chip(state).querySelector("b")?.textContent).toBe("–");
+    }
+    // The states sessions report themselves keep their counts.
+    expect(screen.getByRole("button", { name: "Failed: 1 session" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "All: 7 sessions" })).toBeTruthy();
+
+    // Recovery: the next host poll brings real counts back.
+    fail.hosts = false;
+    await act(() => queryClient.refetchQueries({ queryKey: ["hosts"], type: "active" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Disconnected: 1 session" })).toBeTruthy(), { timeout: 5000 });
+    expect(chip("disconnected").querySelector("b")?.textContent).toBe("1");
+    expect(screen.getByRole("button", { name: "Source not responding: 0 sessions" })).toBeTruthy();
+    expect(chip("source_unavailable").querySelector("b")?.textContent).toBe("0");
+    expect(document.body.textContent).not.toContain("unknown while host status");
+  });
+});
+
+describe("DashboardPage to a session and back (G23, G25)", () => {
+  const path = () => screen.getByTestId("path").textContent;
+  const card = (title: string) => screen.getByRole("heading", { name: title }).closest(".session-card") as HTMLElement;
+  const sessionHeading = (title: string) => screen.findByRole("heading", { level: 1, name: title }, { timeout: 5000 });
+  const backLink = () => screen.getByRole("link", { name: "Sessions" });
+
+  it("returns to the filtered list it came from, as a step back in history", async () => {
+    await renderDashboard();
+    fireEvent.click(screen.getByRole("button", { name: "Failed: 1 session" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search sessions" }), { target: { value: "memory" } });
+    await waitFor(() => expect(search()).toBe("?state=failed&q=memory"));
+
+    fireEvent.click(card("Investigate memory leak"));
+    await sessionHeading("Investigate memory leak");
+    // A real href with the filters, so a new tab or a copied link lands on the same list.
+    expect(backLink().getAttribute("href")).toBe("/?state=failed&q=memory");
+
+    fireEvent.click(backLink());
+    await waitFor(() => expect(path()).toBe("/"));
+    expect(search()).toBe("?state=failed&q=memory");
+    expect(cardTitles()).toEqual(["Investigate memory leak"]);
+    expect(pressed("Failed: 1 session")).toBe("true");
+
+    // It stepped back rather than pushing the list again: Back now leaves the filter, not returns to the session.
+    fireEvent.click(screen.getByRole("button", { name: "History back" }));
+    await waitFor(() => expect(search()).toBe(""));
+    expect(path()).toBe("/");
+  });
+
+  it("updates the card's unread label after marking the session's alert read on its page", async () => {
+    await renderDashboard();
+    const id = (card("Investigate memory leak").getAttribute("href") ?? "").replace("/sessions/", "");
+    const key = alertStorageKey("demo", DEMO_USER);
+    const value = JSON.stringify([
+      { id: "a1", kind: "failed", sessionId: id, hostId: "00000000-0000-4000-8000-0000000000a1", at: "2026-11-02T09:00:00.000Z", isDemo: true, read: false },
+    ]);
+    act(() => {
+      window.localStorage.setItem(key, value);
+      window.dispatchEvent(new StorageEvent("storage", { key, newValue: value }));
+    });
+    expect(await within(card("Investigate memory leak")).findByText("1 unread alert")).toBeTruthy();
+
+    fireEvent.click(card("Investigate memory leak"));
+    await sessionHeading("Investigate memory leak");
+    fireEvent.click(screen.getByRole("button", { name: /^Mark read: Failed, / }));
+
+    fireEvent.click(backLink());
+    await screen.findByRole("group", { name: "Filter sessions by state" }, { timeout: 5000 });
+    expect(within(card("Investigate memory leak")).queryByText(/unread alert/)).toBeNull();
+    expect(card("Investigate memory leak").classList.contains("has-unread")).toBe(false);
+    expect(screen.queryByRole("link", { name: /unread alert/ })).toBeNull();
   });
 });

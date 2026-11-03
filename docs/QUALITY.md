@@ -6,7 +6,7 @@
 |---|---|---|
 | Type check (strict, all workspaces and DB tests) | `npm run typecheck` | Available |
 | Lint, including the platform-neutrality rules for `@mc/domain` | `npm run lint` | Available |
-| Unit, component and SQL-level tests (vitest "unit" in Node, "dom" in jsdom, "sql" in PGlite) | `npm test` | Available. 835 tests as of 2026-11-03 (fifth cycle), 71 of them SQL-level, including axe accessibility checks (jsdom; no colour contrast). Component tests use jsdom, not a real browser, so layout, CSS and real notification APIs aren't covered. |
+| Unit, component and SQL-level tests (vitest "unit" in Node, "dom" in jsdom, "sql" in PGlite) | `npm test` | Available. 930 tests as of 2026-11-03 (sixth cycle), 71 of them SQL-level, including axe accessibility checks (jsdom; no colour contrast). Component tests use jsdom, not a real browser, so layout, CSS and real notification APIs aren't covered. |
 | Production web build | `npm run build -w @mc/web` | Available |
 | Browser checks (65) | `npm run test:e2e` | **Unavailable.** Endpoint protection kills headless Chrome and Edge. |
 | RLS and isolation tests | `npm run test:db` | **Unavailable.** The Docker engine doesn't respond. |
@@ -26,6 +26,7 @@ When reporting results, label each check as **automated** (it ran), **synthetic*
   - iOS and iPadOS 16.4 and later only offer notifications inside an app installed to the Home Screen.
   - Safari ignores `tag`, so Tavro removes duplicates itself.
   - Chrome Incognito blocks notifications.
+- **Notification bursts across tabs (D-018):** the shared burst is read and written without a lock. If two hidden tabs notify within the same few milliseconds, both can read "no burst" and each make a sound, and the later write replaces the earlier one's counts. Polls are 30 s apart per tab, so this needs near-simultaneous polls; the cost is one extra sound or a summary that undercounts. `navigator.locks` would serialise it but is asynchronous (the notification decision would have to move out of the render effect) and unavailable outside secure contexts and in older browsers, so it isn't used.
 - Alerts are detected by the open app, so changes that happen while Tavro is closed don't produce alerts. They show up as the current status when you reopen it.
 - Alert detection pauses while the browser reports being offline or a data fetch has failed. If Tavro's own connection drops silently without a failed fetch, a host can still be reported as disconnected.
 - Visual and responsive quality is reviewed from code only. No screenshots can be taken here.

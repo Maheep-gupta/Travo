@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   DASHBOARD_FILTER_KEYS,
+  DASHBOARD_ORIGIN_MAX_LENGTH,
   EMPTY_DASHBOARD_FILTER,
   EXTRA_STATES,
+  HOST_DERIVED_STATES,
   OVERVIEW_STATES,
   SEARCH_QUERY_MAX_LENGTH,
   STATUS_GROUPS,
@@ -11,12 +13,16 @@ import {
   buildSessionViews,
   countByState,
   dashboardFilterValues,
+  dashboardOrigin,
+  dashboardReturnPath,
   isDisplayStatus,
   isFiltering,
   isStatusGroup,
   needsAttention,
   parseDashboardFilter,
   projectOptions,
+  unknownStateCounts,
+  unknownStateMessage,
   type DashboardFilter,
   type DisplayStatus,
   type FilterParams,
@@ -163,5 +169,73 @@ describe("applyDashboardFilter", () => {
 
   it("lists distinct projects alphabetically", () => {
     expect(projectOptions(views)).toEqual(["api", "web"]);
+  });
+});
+
+describe("unknownStateCounts", () => {
+  it("marks Disconnected and Source not responding unknown while the host list is missing, and nothing once it loads", () => {
+    expect([...unknownStateCounts({ hostsLoaded: false })].sort()).toEqual(["disconnected", "source_unavailable"]);
+    expect(unknownStateCounts({ hostsLoaded: true }).size).toBe(0);
+  });
+
+  it("covers exactly the states only the host list can produce", () => {
+    // Without hosts every session keeps its stored status, so the host-derived counts are always 0: not evidence.
+    const stored = ALL.filter((s): s is Exclude<DisplayStatus, "disconnected" | "source_unavailable"> => !HOST_DERIVED_STATES.includes(s));
+    const counts = countByState(buildSessionViews(stored.map((s) => session(s, "h1", s)), null, now, CURRENT));
+    for (const s of HOST_DERIVED_STATES) expect(counts.byState[s], s).toBe(0);
+    for (const s of stored) expect(counts.byState[s], s).toBe(1);
+    // Every unknown count is one the overview shows.
+    for (const s of HOST_DERIVED_STATES) expect(OVERVIEW_STATES).toContain(s);
+    // With the host list, a session can be Disconnected: its host stopped heartbeating.
+    const withHosts = buildSessionViews([session("x", "h1", "running")], [host("h1", 60 * 60_000)], now, CURRENT);
+    expect(withHosts[0]?.displayStatus).toBe("disconnected");
+  });
+
+  it("says why a filter to an unknown state is empty, and stays out of the way otherwise", () => {
+    const unknown = unknownStateCounts({ hostsLoaded: false });
+    expect(unknownStateMessage("disconnected", unknown)).toBe("Host status isn't loaded, so Tavro can't tell which sessions are disconnected right now.");
+    expect(unknownStateMessage("source_unavailable", unknown)).toMatch(/^Host status isn't loaded, so Tavro can't tell /);
+    expect(unknownStateMessage("running", unknown)).toBeNull();
+    expect(unknownStateMessage(null, unknown)).toBeNull();
+    expect(unknownStateMessage("disconnected", unknownStateCounts({ hostsLoaded: true }))).toBeNull();
+  });
+});
+
+describe("dashboardReturnPath", () => {
+  it("round-trips the dashboard's own origin, filters included", () => {
+    expect(dashboardReturnPath(dashboardOrigin("?state=failed&q=memory%20leak"))).toBe("/?state=failed&q=memory%20leak");
+    expect(dashboardReturnPath(dashboardOrigin(""))).toBe("/");
+    expect(dashboardReturnPath(dashboardOrigin("?"))).toBe("/");
+  });
+
+  it("rejects anything that isn't the dashboard path with a search string", () => {
+    for (const state of [
+      undefined,
+      null,
+      "/?state=failed",
+      42,
+      {},
+      { dashboardOrigin: null },
+      { dashboardOrigin: "/?q=x" },
+      { dashboardOrigin: { pathname: "/alerts", search: "" } },
+      { dashboardOrigin: { pathname: "//evil.example", search: "" } },
+      { dashboardOrigin: { pathname: "https://evil.example/", search: "" } },
+      { dashboardOrigin: { search: "?q=x" } },
+      { dashboardOrigin: { pathname: "/", search: 1 } },
+      // A search that could leave the path or carry more than a query.
+      { dashboardOrigin: { pathname: "/", search: "/evil.example" } },
+      { dashboardOrigin: { pathname: "/", search: "evil.example" } },
+      { dashboardOrigin: { pathname: "/", search: "?q=x#top" } },
+      { dashboardOrigin: { pathname: "/", search: "?q=a b" } },
+      { dashboardOrigin: { pathname: "/", search: "?q=a\nb" } },
+      { dashboardOrigin: { pathname: "/", search: `?q=${"x".repeat(DASHBOARD_ORIGIN_MAX_LENGTH)}` } },
+    ]) {
+      expect(dashboardReturnPath(state), JSON.stringify(state)).toBeNull();
+    }
+  });
+
+  it("ignores an inherited origin", () => {
+    const inherited = Object.create({ dashboardOrigin: { pathname: "/", search: "?q=x" } }) as object;
+    expect(dashboardReturnPath(inherited)).toBeNull();
   });
 });

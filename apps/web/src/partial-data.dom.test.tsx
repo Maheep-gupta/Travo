@@ -36,11 +36,17 @@ vi.mock("./platform.js", async (importOriginal) => {
 });
 
 // No AlertsProvider: its watcher polls sessions and hosts, which these tests
-// must control. The pages only read the (empty) alert list.
-vi.mock("./alerts-context.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./alerts-context.js")>()),
-  useAlerts: () => [],
-}));
+// must control. The pages only read the (empty) alert list; the session page's
+// alert actions get a real, empty store that nothing here writes to.
+vi.mock("./alerts-context.js", async (importOriginal) => {
+  const { AlertStore } = await import("./alert-store.js");
+  const store = new AlertStore(window.localStorage, "partial-data-test-alerts");
+  return {
+    ...(await importOriginal<typeof import("./alerts-context.js")>()),
+    useAlerts: () => [],
+    useAlertStore: () => store,
+  };
+});
 
 // Each test renders the app shell against the demo backend and walks a failure and its recovery;
 // the first one also pays for loading every page module.
@@ -189,7 +195,8 @@ describe("dashboard: sessions loaded, hosts failed", () => {
     expect(fresh(c)).toMatch(/, Stale$/);
     expect(c.textContent).toContain("Host not loaded");
     expect(c.textContent).not.toContain("· offline");
-    expect(screen.getByRole("button", { name: "Disconnected: 0 sessions" })).toBeTruthy();
+    // Without hosts nothing can be counted as disconnected: unknown, not 0 (G22).
+    expect(screen.getByRole("button", { name: "Disconnected: unknown while host status isn't loaded" })).toBeTruthy();
     expect(h1()).toBe("Statuses can't be confirmed — last reported: 3 sessions need you.");
     // The banner sees nothing wrong yet, but the pill agrees with the page, not with "Connected".
     expect(banner()).toBe("");
@@ -261,6 +268,25 @@ describe("dashboard: sessions loaded, hosts failed", () => {
     await poll("hosts");
     expect(hostSelect().value).toBe(LAPTOP);
     expect(hostSelect().selectedOptions[0]?.textContent).toBe("Demo laptop");
+  });
+
+  it("filtered to a state only the host list can tell, says it can't tell rather than that nothing matches, and retries", async () => {
+    fail.hosts = "api";
+    renderAt("/");
+    await screen.findByRole("heading", { name: LAPTOP_SESSION }, T);
+    fireEvent.click(screen.getByRole("button", { name: "Disconnected: unknown while host status isn't loaded" }));
+
+    const empty = await screen.findByRole("heading", { name: "Can't tell right now" }, T);
+    const state = empty.closest("[role=status]") as HTMLElement;
+    expect(state.textContent).toContain("Host status isn't loaded, so Tavro can't tell which sessions are disconnected right now.");
+    expect(screen.queryByRole("heading", { name: "Nothing matches" })).toBeNull();
+    expect(document.body.textContent).not.toMatch(/No sessions match/);
+
+    // Its retry loads the host list, and the filter then shows what it really holds.
+    fail.hosts = false;
+    fireEvent.click(within(state).getByRole("button", { name: "Try again" }));
+    await screen.findByRole("heading", { name: "Nightly data import" }, T);
+    expect(screen.queryByRole("heading", { name: "Can't tell right now" })).toBeNull();
   });
 
   it("never shows an internal error message", async () => {

@@ -2,7 +2,7 @@ import { Link, useParams } from "react-router";
 import type { HostRow } from "@mc/contracts";
 import { buildHostView, hostSourceOk, pageAvailability, relativeTime, syncWithRefreshes, type HostConnectivity } from "@mc/domain";
 import { useApi } from "../api-context.js";
-import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, MissingDataNotice, RefreshFailedNotice, SessionListSkeleton } from "../components.js";
+import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, MissingDataNotice, RefreshFailedNotice, SessionListSkeleton, TruncatedNotice } from "../components.js";
 import { useConnection, useHosts, useNow, useSessionViews } from "../hooks.js";
 import { IconAlert, IconArrowLeft, IconHost } from "../icons.js";
 import { FreshnessNote, SessionSection } from "./DashboardPage.js";
@@ -73,6 +73,8 @@ export function HostPage() {
         <h1>{host.name}</h1>
       </header>
       <RefreshFailedNotice failure={sessions.refresh} now={now} onRetry={sessions.refetch} />
+      {/* This host's sessions are picked from that list, so some may be missing. */}
+      <TruncatedNotice truncated={sessions.truncated} dropped={sessions.dropped} />
 
       <div className="host-detail-grid">
         <section className="card" aria-labelledby="h-health">
@@ -150,9 +152,16 @@ export function HostPage() {
         <SessionSection title={`Sessions on ${host.name}`} sessions={own} now={now} />
       ) : (
         <div className="section">
-          <EmptyState title="No sessions from this host">
-            <p>Sessions appear here once its connector reports them.</p>
-          </EmptyState>
+          {sessions.truncated || sessions.dropped > 0 ? (
+            // An incomplete list can't show that the host has none.
+            <EmptyState title="No sessions from this host among those loaded">
+              <p>Tavro's session list is incomplete, so this host may have sessions it didn't load.</p>
+            </EmptyState>
+          ) : (
+            <EmptyState title="No sessions from this host">
+              <p>Sessions appear here once its connector reports them.</p>
+            </EmptyState>
+          )}
         </div>
       )}
       {own.length > 0 && (

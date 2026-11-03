@@ -1,7 +1,17 @@
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import { ApiError } from "@mc/api-client/demo";
-import { STATUS_LABEL, formatDataTime, type DisplayStatus, type HostConnectivity, type RefreshFailure, type StatusSource } from "@mc/domain";
+import {
+  STATUS_LABEL,
+  formatDataTime,
+  sessionListGapMessages,
+  type DisplayStatus,
+  type HostConnectivity,
+  type RefreshFailure,
+  type SessionListGaps,
+  type StatusSource,
+} from "@mc/domain";
 import { IconAlert, IconCheck, IconInbox, IconInfo } from "./icons.js";
+import { useBannerShowsPaused } from "./offline-banner.js";
 
 export function StatusBadge({ status, variant = "plain" }: { status: DisplayStatus; variant?: "plain" | "pill" | "lg" }) {
   const cls = variant === "plain" ? "" : variant === "pill" ? " pill" : " pill lg";
@@ -47,11 +57,14 @@ export function PageHeader({ eyebrow, title, children }: { eyebrow?: string; tit
   );
 }
 
-export function EmptyState({ title, children, icon = <IconInbox /> }: { title: string; children?: ReactNode; icon?: ReactNode }) {
+/** `headingRef` makes the heading focusable from script, for when the content the user was on disappears. */
+export function EmptyState({ title, children, icon = <IconInbox />, headingRef }: { title: string; children?: ReactNode; icon?: ReactNode; headingRef?: Ref<HTMLHeadingElement> }) {
   return (
     <div className="state" role="status">
       {icon}
-      <h2>{title}</h2>
+      <h2 ref={headingRef} tabIndex={headingRef ? -1 : undefined}>
+        {title}
+      </h2>
       {children}
     </div>
   );
@@ -82,10 +95,18 @@ function safeErrorMessage(error: Error | null): string {
   return error instanceof ApiError && error.message ? error.message : "Something went wrong. Try again in a moment.";
 }
 
+/**
+ * A paused project is already explained by the shell's banner, with how to
+ * restore it; repeating that here would say it twice (QA LOW-4). The page then
+ * only points to the banner, and isn't announced a second time. Where no
+ * banner speaks (sign-in, setup) the full message stays.
+ */
 export function ErrorState({ error, onRetry }: { error: Error; onRetry?: () => void }) {
+  const bannerSaysPaused = useBannerShowsPaused();
+  const deferToBanner = bannerSaysPaused && error instanceof ApiError && error.code === "paused";
   return (
-    <Notice tone="error">
-      <p>{safeErrorMessage(error)}</p>
+    <Notice tone="error" role={deferToBanner ? "note" : undefined}>
+      <p>{deferToBanner ? "Your Supabase project is paused. See the notice at the top of the page." : safeErrorMessage(error)}</p>
       {onRetry && (
         <div className="actions">
           <button type="button" className="btn small" onClick={onRetry}>
@@ -177,5 +198,22 @@ export function SessionListSkeleton({ count = 4, label = "Loading sessions…" }
         <div key={i} className="skel" aria-hidden="true" />
       ))}
     </div>
+  );
+}
+
+/**
+ * The session list is incomplete: capped at the newest sessions, or rows that
+ * couldn't be read were left out (spec 3.1, 10.2; Part 16). Says so, so the
+ * counts above are never read as covering everything; only counts are shown.
+ */
+export function TruncatedNotice({ truncated, dropped }: SessionListGaps) {
+  const messages = sessionListGapMessages({ truncated, dropped });
+  if (messages.length === 0) return null;
+  return (
+    <Notice tone={dropped > 0 ? "warn" : "info"}>
+      {messages.map((m) => (
+        <p key={m}>{m}</p>
+      ))}
+    </Notice>
   );
 }

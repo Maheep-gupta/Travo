@@ -14,18 +14,32 @@ Users can trust Tavro to tell them what their AI coding sessions are doing and w
 The requirements source is `docs/PRODUCT_SPEC.md`. Status for every requirement is in `docs/GAP_ANALYSIS.md`; the gap numbers (G#) below refer to it.
 
 **Next cycle** (G numbers are in GAP_ANALYSIS; session continuity is in `docs/EXECUTION_STATE.md`):
-Local gaps G22–G32 come from the 2026-11-03 spec audit, in priority order:
-1. **G25:** read and dismiss a session's alerts from its page.
-2. **G26:** name states on the Alerts page.
-3. **G23:** keep filters when going back from a session.
-4. **G22:** unknown chips while hosts are missing.
-5. **G31:** axe on the Alerts and Host pages, plus a token contrast test.
-6. **G28:** list cap and malformed rows.
-7. **G27:** diagnostics.
-8. **G29:** setup checklist.
-9. **G30:** remaining mobile items.
-10. **G32:** small review follow-ups. These include exporting `isKeyRejection` from api-client, so the connector's copy can go.
-11. **G24:** transition model.
+Remaining local gaps, in priority order:
+1. **G27, diagnostics:**
+   - provider failure categories reach the UI (needs a DB contract change, so design it first);
+   - a Settings diagnostics section with "copy report".
+2. **G29:** a guided setup checklist.
+3. **G30:** the remaining mobile items.
+4. **G33:** a control border contrast decision.
+5. **G32 rest:** backlog items L2, L3, I1 and I3.
+6. **G24:** a transition model.
+
+**Done 2026-11-03 (sixth cycle):**
+- **G22:** unknown chips, plus an honest "can't tell" state when a chip is filtered.
+- **G23:** Back keeps the dashboard filters (validated router state; no open redirect).
+- **G25:** read and dismiss a session's alerts from its page.
+- **G26:** Alerts page name states, focus management and announcements.
+- **G28:**
+  - an honest 500 cap: parse first, then cap; the notice shows on the Dashboard, Hosts and Host pages;
+  - a session past the cap is looked up directly instead of being called "not found";
+  - a malformed row is dropped and counted.
+- **G31:** axe on the Alerts and Host pages; a token contrast test (391 pairs); one light accent fix.
+- **G32:**
+  - bursts shared across tabs, cleared on sign-out, user switch, Clear and open;
+  - paused shown once;
+  - a shared `isKeyRejection`.
+- **Two flaky tests** were test races; both reproduced and fixed at the cause.
+- **QA and security reviewed the cycle.** No Critical or High issues; every Medium and Low finding was fixed.
 
 **Done 2026-11-03 (fifth cycle):**
 - **G13 finished:** partial data (D-023), sleep/resume (D-024), and a host refused sign-in (`auth_failed`).

@@ -2,16 +2,25 @@
 
 Continuity between sessions. Update it at the end of every cycle. Requirements are in `PRODUCT_SPEC.md`, statuses in `GAP_ANALYSIS.md`, and the plan in `ROADMAP.md` (D-016).
 
-**Last updated:** 2026-11-03, end of the fifth cycle.
+**Last updated:** 2026-11-03, end of the sixth cycle.
 
 ## Where things stand
 
 - **Branch:** `main`. The local commits are ahead of `origin/main` (public). They are **not pushed**, because a push needs founder authorization (D-017).
 - **Schema:** v3. Clients require exactly v3. The latest migration, `20261104000001_fix_set_owner_from_host.sql`, changes a function body only and leaves the version at 3.
 - **Gates at the last commit:**
-  - `npm run check:release` passes: typecheck, lint, 835 tests (71 of them SQL-level in PGlite), build, and 227.6 kB gzip against a 270 kB budget.
+  - `npm run check:release` passes: typecheck, lint, 930 tests (SQL-level ones in PGlite included), build, and 231.5 kB gzip against a 270 kB budget.
   - **When the laptop is busy** with the user's other projects (Angular dev servers and test runs), leave those processes alone. The per-test ceilings in `vitest.config.ts` absorb the load.
   - `test:db` and `test:e2e` have never run. The PGlite layer is **not** `test:db` (D-021).
+
+## Sixth cycle (2026-11-03): what was done
+
+- **Team:**
+  - Four engineers worked in parallel, each owning its own files: session page and dashboard; Alerts page and bursts; session list and API client; accessibility.
+  - QA and security then reviewed the integrated tree, and two engineers fixed their findings.
+  - The main session fixed the connector's key rule (it now passes the error code) and the docs.
+- **Delivered:** see ROADMAP "Done 2026-11-03 (sixth cycle)".
+- **New local storage:** the notification burst key (D-018). It holds only counts, kinds and times. It is listed in Settings and removed on sign-out, user switch, Clear and open.
 
 ## Fifth cycle (2026-11-03): what was done
 
@@ -91,7 +100,7 @@ Continuity between sessions. Update it at the end of every cycle. Requirements a
 
 ## Next actions (in order)
 
-1. **G22–G32** in the order given in ROADMAP "Next cycle".
+1. The remaining local gaps, in the order given in ROADMAP "Next cycle" (G27 first).
 2. **When authorized:** follow `docs/DB_TESTING.md`, then `docs/DEPLOYMENT.md`. Both start with gates that can't be skipped.
 3. **Before the real adapter:** run the checklist in `docs/INTEGRATIONS.md`, then founder approval.
 

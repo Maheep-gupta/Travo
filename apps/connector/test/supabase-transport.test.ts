@@ -107,6 +107,12 @@ describe("SupabaseTransport sign-in", () => {
     expect(await failure(backend({ token: [rejected()] }).transport.heartbeat(HEARTBEAT))).toMatchObject({ remedy: "pair_again" });
   });
 
+  it("doesn't blame the publishable key for an expired host token whose text mentions an API key", async () => {
+    const expired = json(401, { code: "PGRST301", message: "No suitable API key or wrong key type", details: null, hint: null });
+    const e = await failure(backend({ token: [json(200, SESSION)], heartbeat: [expired] }).transport.heartbeat(HEARTBEAT));
+    expect(e).not.toMatchObject({ remedy: "check_publishable_key" });
+  });
+
   it("recovers after a network failure, then reuses the session", async () => {
     const { transport, calls } = backend({ token: ["network", json(200, SESSION)], heartbeat: [json(200, "2026-10-29T12:00:00Z")] });
     await failure(transport.heartbeat(HEARTBEAT));
