@@ -1,0 +1,36 @@
+/* Tavro guided setup checklist (spec 11.2). Uses tokens from styles.css. */
+
+.setup-progress { margin: 0 0 var(--sp-3); color: var(--text-2); font-size: 0.92rem; }
+
+.setup-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.setup-step {
+  --c: var(--st-neutral);
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-3); align-items: start;
+  padding: var(--sp-3);
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface);
+}
+.setup-step.ss-done { --c: var(--st-working); }
+.setup-step.ss-current { --c: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: var(--accent-soft); }
+.setup-step.ss-unknown { --c: var(--st-approval); }
+
+.setup-mark {
+  display: grid; place-items: center; width: 28px; height: 28px; flex: none;
+  border-radius: 50%; border: 1.5px solid var(--c); color: var(--c);
+  font: 600 0.82rem/1 var(--mono); font-variant-numeric: tabular-nums;
+}
+.setup-mark svg { width: 16px; height: 16px; }
+
+.setup-body { min-width: 0; }
+.setup-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); margin: 0; }
+.setup-title { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.setup-state { font-family: var(--mono); font-size: 0.74rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.setup-step.ss-current .setup-state { color: var(--text); }
+.setup-detail { margin: var(--sp-1) 0 0; color: var(--text-2); font-size: 0.9rem; overflow-wrap: anywhere; }
+.setup-action { margin-top: var(--sp-2); }
+
+/* Blocked steps recede but stay readable: text colours are unchanged for contrast. */
+.setup-step.ss-blocked { background: transparent; border-style: dashed; border-color: var(--line-strong); }
+
+@media (max-width: 359px) {
+  .setup-step { gap: var(--sp-2); padding: var(--sp-2); }
+}

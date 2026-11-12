@@ -2,6 +2,8 @@
 
 **Status (2026-11-03):** `npm run test:db` has never run. The real adapter and any production database stay blocked until it passes (D-002, D-017, spec 10.4).
 
+**Schema v4 (2026-11-12, D-026):** `rls.test.ts` expects `schema_version = 4` and has a case for the heartbeat's failure categories (known and unknown values, a category on a healthy report, a v3 connector's four-argument call, no owner UPDATE). Like the rest of the file it is **written, not yet run**. The PGlite layer (`supabase/sql-tests`) covers the same behaviour plus the v3 → v4 upgrade path at SQL level.
+
 ## Why it can't run here
 
 `test:db` (`supabase/tests/rls.test.ts`) needs `supabase start`, and that needs Docker. On this managed laptop the Docker engine doesn't respond, and endpoint protection must not be bypassed (spec 15.4). Installing WSL, Podman or another container runtime would also need IT approval, so it isn't attempted.

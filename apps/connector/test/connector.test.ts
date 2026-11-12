@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OBSERVED_AT_MAX_SKEW_MS, type SessionUpsert } from "@mc/contracts";
 import { describe, expect, it } from "vitest";
-import { Connector, MAX_BACKOFF_MS, SKIPPED_WRITES_LIMIT, backoffDelay } from "../src/connector.js";
+import { Connector, MAX_BACKOFF_MS, ProviderError, SKIPPED_WRITES_LIMIT, backoffDelay, providerFailureCategory } from "../src/connector.js";
 import { REAL_ADAPTER_ENABLED, loadConfig } from "../src/config.js";
 import { loadCredentials } from "../src/credentials.js";
 import { pairHost } from "../src/pairing.js";
@@ -125,6 +125,9 @@ describe("Connector", () => {
     // Health is reported at once when it changes (t=15s), then on the normal schedule (t=45s),
     // so the host stays online while the dashboard stops trusting its statuses.
     expect(transport.heartbeats.map((h) => h.provider_ok)).toEqual([true, false, false]);
+    // An error without a known category is reported as "failed"; its message never is.
+    expect(transport.heartbeats.map((h) => h.provider_error_kind)).toEqual([null, "failed", "failed"]);
+    expect(JSON.stringify(transport.heartbeats)).not.toContain("timed out");
     // A failed read is not "no sessions": nothing is ended.
     expect(transport.events.filter((e) => e.type === "session_ended")).toHaveLength(0);
     expect(transport.sessions.get("mock:a")?.status).toBe("running");
@@ -138,6 +141,26 @@ describe("Connector", () => {
     // Recovery is reported immediately, not at the next scheduled heartbeat.
     expect(transport.heartbeats.at(-1)?.provider_ok).toBe(true);
     expect(transport.events.map((e) => `${e.type}:${e.status}`)).toEqual(["session_discovered:running", "status_changed:waiting_for_input"]);
+  });
+
+  it("reports a provider's own category, re-reports at once when it changes, and passes on only known ones", async () => {
+    const { provider, transport, connector, advance } = setup();
+    await connector.runOnce();
+    provider.failWith = Object.assign(new Error("claude CLI was not found."), { category: "cli_missing" });
+    advance(1000);
+    await connector.runOnce();
+    advance(1000);
+    await connector.runOnce(); // same cause, not yet due: no heartbeat
+    provider.failWith = Object.assign(new Error("not signed in"), { category: "auth_required" });
+    advance(1000);
+    await connector.runOnce(); // new cause: reported at once
+    provider.failWith = Object.assign(new Error("odd"), { category: "see /home/dev/secret.txt" });
+    advance(1000);
+    await connector.runOnce();
+    expect(transport.heartbeats.map((h) => h.provider_error_kind)).toEqual([null, "cli_missing", "auth_required", "failed"]);
+    expect(providerFailureCategory({ category: "writes_not_applied" })).toBe("failed"); // the connector's own category, not a provider's
+    expect(providerFailureCategory("timeout")).toBe("failed");
+    expect(providerFailureCategory(new ProviderError("x", "timeout"))).toBe("timeout");
   });
 
   it("backs off while the provider keeps failing", async () => {
@@ -288,6 +311,7 @@ describe("Connector with a clock behind the backend's stored observations", () =
     advance(1000);
     await connector.runOnce(); // health changed: heartbeat sent at once
     expect(transport.heartbeats.map((h) => h.provider_ok)).toEqual([true, false]);
+    expect(transport.heartbeats.at(-1)?.provider_error_kind).toBe("writes_not_applied");
     expect(logs.some((l) => l.includes("reporting the source as not responding"))).toBe(true);
     expect(connector.connectionState).toBe("online"); // the backend itself is fine
 

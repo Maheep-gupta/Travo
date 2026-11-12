@@ -1,7 +1,7 @@
-import type { SessionStatus, SessionUpsert } from "@mc/contracts";
+import { PROVIDER_ERROR_KINDS, type ProviderErrorKind, type SessionStatus, type SessionUpsert } from "@mc/contracts";
 import { HEARTBEAT_INTERVAL_MS, effectiveCapabilities, diffObservations, transcriptContentDecision, type SessionTransition } from "@mc/domain";
 import { HostAuthError, TranscriptsRefusedError } from "./transports/errors.js";
-import type { EventInput, KnownSession, MessageInput, Provider, Transport } from "./types.js";
+import type { EventInput, KnownSession, MessageInput, Provider, ProviderFailureCategory, Transport } from "./types.js";
 
 /**
  * "provider_error": the backend is reachable but the session source failed
@@ -17,10 +17,26 @@ export type ConnectionState = "starting" | "online" | "offline" | "provider_erro
 
 /** A failure of the provider (session source), as opposed to the transport. */
 export class ProviderError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /** Reported to the backend (schema v4); the message never is. */
+    readonly category: ProviderFailureCategory = "failed",
+  ) {
     super(message);
     this.name = "ProviderError";
   }
+}
+
+const PROVIDER_CATEGORIES: ReadonlySet<string> = new Set(PROVIDER_ERROR_KINDS.filter((k) => k !== "writes_not_applied"));
+
+/**
+ * The category a provider attached to its error (ClaudeCommandError has one),
+ * or "failed" for anything else. Only a known category is passed on, so a
+ * provider can't put free text into the heartbeat.
+ */
+export function providerFailureCategory(e: unknown): ProviderFailureCategory {
+  const c = typeof e === "object" && e !== null && "category" in e ? (e as { category: unknown }).category : undefined;
+  return typeof c === "string" && PROVIDER_CATEGORIES.has(c) ? (c as ProviderFailureCategory) : "failed";
 }
 
 export interface ConnectorOptions {
@@ -85,8 +101,8 @@ export class Connector {
   private lastHeartbeat = 0;
   private offlineSince: Date | null = null;
   private providerFailingSince: Date | null = null;
-  /** Source health as last reported to the backend; null = not reported yet. */
-  private reportedProviderOk: boolean | null = null;
+  /** Source health as last reported to the backend: null = healthy, undefined = not reported yet. */
+  private reportedErrorKind: ProviderErrorKind | null | undefined = undefined;
   private skippedCycles = 0;
   private heartbeatSentThisCycle = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -131,14 +147,17 @@ export class Connector {
           const fix =
             e.remedy === "check_publishable_key"
               ? "The project rejected the publishable key: check MC_SUPABASE_PUBLISHABLE_KEY in apps/connector/.env (it may have been rotated); pairing again won't help"
-              : "This host may have been revoked. Pair it again from the web app (npm run connector -- pair <CODE>)";
-          this.log(`not authorized: ${e.message}. ${fix}; retrying every ${AUTH_RETRY_MS / 60_000} minutes meanwhile`);
+              : e.remedy === "apply_migrations"
+                ? "This connector is newer than the project's database: apply the pending migrations (supabase/migrations, see docs/DEPLOYMENT.md step 3); pairing again won't help"
+                : "This host may have been revoked. Pair it again from the web app (npm run connector -- pair <CODE>)";
+          const what = e.remedy === "apply_migrations" ? "backend out of date" : "not authorized";
+          this.log(`${what}: ${e.message}. ${fix}; retrying every ${AUTH_RETRY_MS / 60_000} minutes meanwhile`);
         }
         this.state = "auth_failed";
         this.offlineSince = null;
         // Heartbeat (and report health) at once if it's accepted again.
         this.lastHeartbeat = 0;
-        this.reportedProviderOk = null;
+        this.reportedErrorKind = undefined;
         return AUTH_RETRY_MS;
       }
       // The heartbeat went through but the writes didn't: the host looks
@@ -161,7 +180,7 @@ export class Connector {
       this.state = "offline";
       // Force a heartbeat (and a fresh health report) as soon as we are back.
       this.lastHeartbeat = 0;
-      this.reportedProviderOk = null;
+      this.reportedErrorKind = undefined;
       return backoffDelay(this.failures, this.pollMs);
     }
   }
@@ -187,22 +206,24 @@ export class Connector {
       observed = await provider.poll();
     } catch (e) {
       // Provider errors are already sanitised (no command output); keep only the message.
-      providerError = new ProviderError(`${provider.id}: ${e instanceof Error ? e.message : "unknown error"}`);
+      providerError = new ProviderError(`${provider.id}: ${e instanceof Error ? e.message : "unknown error"}`, providerFailureCategory(e));
     }
 
-    // Heartbeat on schedule, and immediately when source health changes, so the
-    // dashboard stops trusting (or trusts again) this host's statuses within a cycle.
+    // Heartbeat on schedule, and immediately when source health or its
+    // category changes, so the dashboard stops trusting (or trusts again) this
+    // host's statuses within a cycle and shows the current cause.
     const writesTrusted = this.skippedCycles < SKIPPED_WRITES_LIMIT;
-    const providerOk = providerError === null && writesTrusted;
-    if (now.getTime() - this.lastHeartbeat >= HEARTBEAT_INTERVAL_MS || providerOk !== this.reportedProviderOk) {
+    const errorKind: ProviderErrorKind | null = providerError ? providerError.category : writesTrusted ? null : "writes_not_applied";
+    if (now.getTime() - this.lastHeartbeat >= HEARTBEAT_INTERVAL_MS || errorKind !== this.reportedErrorKind) {
       await transport.heartbeat({
         platform: this.opts.platform,
         connector_version: this.opts.version,
         remote_control_allowed: this.opts.remoteControlAllowed,
-        provider_ok: providerOk,
+        provider_ok: errorKind === null,
+        provider_error_kind: errorKind,
       });
       this.lastHeartbeat = now.getTime();
-      this.reportedProviderOk = providerOk;
+      this.reportedErrorKind = errorKind;
       this.heartbeatSentThisCycle = true;
     }
     if (providerError) throw providerError;

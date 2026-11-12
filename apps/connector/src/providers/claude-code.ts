@@ -286,9 +286,9 @@ function runFailure(result: CommandResult, step: "agents" | "version"): ClaudeCo
 /**
  * Lists live Claude Code sessions. poll() rejects with a ClaudeCommandError
  * (fixed message, plus `kind` and `category` for diagnostics) on any failure,
- * so the connector's provider_error handling applies (provider_ok = false,
- * a source_unavailable alert) and no session is marked ended because of one
- * bad read. The next poll after a failure starts over, version check included.
+ * so the connector's provider_error handling applies (provider_ok = false, the
+ * category as provider_error_kind, a source_unavailable alert) and no session
+ * is marked ended because of one bad read. The next poll after a failure starts over, version check included.
  */
 export class ClaudeCodeProvider implements Provider {
   readonly id = "claude-code" as const;

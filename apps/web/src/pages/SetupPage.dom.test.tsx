@@ -164,6 +164,31 @@ describe("SetupPage", () => {
     expect(choice()).toBe("none/none");
   });
 
+  it("previews the setup steps with choosing a backend as the only next step (spec 11.2)", () => {
+    renderSetup();
+    const steps = within(screen.getByRole("region", { name: "Setup steps" })).getByRole("list", { name: "Setup steps" });
+    const items = within(steps).getAllByRole("listitem");
+    expect(items).toHaveLength(7);
+    const current = items.filter((li) => li.getAttribute("aria-current") === "step");
+    expect(current).toHaveLength(1);
+    expect(current[0]?.textContent).toContain("Choose where your data lives");
+    expect(current[0]?.textContent).toContain("Next step");
+    // The steps follow both ways in (M2), so the link points up and moves focus to the demo heading.
+    const link = within(current[0] as HTMLElement).getByRole("link", { name: "Choose above" });
+    expect(link.getAttribute("href")).toBe("#h-demo");
+    const demoCard = screen.getByRole("region", { name: "Explore with demo data" });
+    const connectForm = screen.getByRole("form", { name: "Connect your Supabase project" });
+    const stepsCard = screen.getByRole("region", { name: "Setup steps" });
+    expect(demoCard.compareDocumentPosition(stepsCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(connectForm.compareDocumentPosition(stepsCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(link);
+    expect(document.activeElement).toBe(within(demoCard).getByRole("heading", { name: "Explore with demo data" }));
+    expect(choice()).toBe("none/none");
+    // Nothing else claims to be done, or to be checking something that doesn't exist yet.
+    expect(steps.textContent).not.toMatch(/Done|Can't tell yet|Checking/);
+    expect(items[2]?.textContent).toContain("Waiting");
+  });
+
   it("opens demo mode from the demo card", async () => {
     renderSetup();
     const card = screen.getByRole("region", { name: "Explore with demo data" });

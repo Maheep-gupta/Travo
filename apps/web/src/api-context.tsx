@@ -28,6 +28,11 @@ export function ApiProvider({ children }: { children: ReactNode }) {
   // The backend being left. The next one is created only once it has removed
   // its stored sign-in, so no session can outlive the switch.
   const closing = useRef<Promise<void>>(Promise.resolve());
+  // The backend created for the current choice. StrictMode (development) runs
+  // the effect below twice for one choice; the second run reuses the first
+  // run's backend instead of leaving a client nobody closes, still refreshing
+  // the stored sign-in and listening to other tabs (security re-check I3).
+  const created = useRef<{ choice: BackendChoice; api: Promise<TavroApi> } | null>(null);
 
   useEffect(() => {
     if (!choice) {
@@ -36,7 +41,8 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     }
     let alive = true;
     setState({ status: "loading" });
-    closing.current.then(() => createApi(choice)).then(
+    if (created.current?.choice !== choice) created.current = { choice, api: closing.current.then(() => createApi(choice)) };
+    created.current.api.then(
       (api) => alive && setState({ status: "ready", api }),
       // Invalid stored settings or a failed chunk download: report, don't crash.
       (e: unknown) =>

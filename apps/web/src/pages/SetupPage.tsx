@@ -1,8 +1,11 @@
 import { useRef, useState, type FormEvent } from "react";
 import { ConnectionConfig } from "@mc/api-client/connection";
+import { setupChecklist } from "@mc/domain";
 import { useApiContext } from "../api-context.js";
 import { fieldErrors, firstInvalidField, type FieldErrors } from "../form-errors.js";
 import { BrandMark } from "../icons.js";
+import { SetupStepList } from "../setup-steps.js";
+import { systemNotificationState } from "../system-notifications.js";
 
 const FIELDS = ["url", "publishableKey"] as const;
 type Field = (typeof FIELDS)[number];
@@ -21,7 +24,20 @@ export function SetupPage() {
   const [url, setUrl] = useState(defaultProjectUrl);
   const [key, setKey] = useState("");
   const [errors, setErrors] = useState<FieldErrors<Field>>({});
+  const demoHeading = useRef<HTMLHeadingElement>(null);
   const inputs = { url: useRef<HTMLInputElement>(null), publishableKey: useRef<HTMLInputElement>(null) };
+  // Nothing is chosen yet, so there are no hosts or sessions to look at.
+  const [preview] = useState(() =>
+    setupChecklist({
+      backend: "none",
+      signedIn: false,
+      hosts: { state: "loading", data: null },
+      sessions: { state: "loading", count: null, dropped: 0 },
+      sync: "current",
+      notifications: systemNotificationState(),
+      now: new Date(),
+    }),
+  );
 
   function connect(e: FormEvent) {
     e.preventDefault();
@@ -84,7 +100,7 @@ export function SetupPage() {
         </section>
 
         <section className="card choice" aria-labelledby="h-demo">
-          <h2 id="h-demo">Explore with demo data</h2>
+          <h2 id="h-demo" ref={demoHeading} tabIndex={-1}>Explore with demo data</h2>
           <p className="muted">Runs entirely in this browser with simulated sessions. No account, no network calls, no real Claude data.</p>
           <button type="button" className="btn primary block" onClick={() => setChoice({ kind: "demo" })}>
             Open demo
@@ -156,6 +172,33 @@ export function SetupPage() {
             Connect
           </button>
         </form>
+
+        {/* Spec 11.2: the whole path up front. Only the first step can be done from here; the rest wait on it.
+            It follows the two ways in so they stay on the first screen of a phone. */}
+        <section className="card" aria-labelledby="h-steps">
+          <h2 id="h-steps">Setup steps</h2>
+          <p className="card-sub" style={{ marginTop: "var(--sp-1)" }}>
+            After you connect, Settings links to this checklist, and each step is checked against what Tavro can actually see.
+          </p>
+          <SetupStepList
+            steps={preview.steps}
+            renderAction={(step) =>
+              step.action?.kind === "choose_backend" ? (
+                <a
+                  href="#h-demo"
+                  className="btn small primary"
+                  onClick={(e) => {
+                    // A bare #hash would scroll but leave keyboard focus where it was.
+                    e.preventDefault();
+                    demoHeading.current?.focus();
+                  }}
+                >
+                  Choose above
+                </a>
+              ) : null
+            }
+          />
+        </section>
         <p className="footnote">Replies and approvals are not available in this release.</p>
       </div>
     </main>

@@ -14,6 +14,21 @@ export interface SignOutResult {
 
 export type ChangeTopic ="sessions" | "session_events" | "hosts";
 
+/** Options for a request about the signed-in user's own data, read or write. */
+export interface ReadOptions {
+  /**
+   * Act only as this user: the request carries this user's token (checked
+   * against its JWT `sub`), or nothing is sent. Tabs share one stored sign-in,
+   * so a sign-in in another tab can swap the token before this tab hears of
+   * it; that account's answer, even an empty one, must never be cached or
+   * baselined as this user's (security re-check L3), and nothing this user
+   * asked for, such as a pairing code, may be created for it (L1). Fails with
+   * `account_changed` when the sign-in now belongs to someone else, and with
+   * `unauthorized` when it is gone.
+   */
+  asUser?: string;
+}
+
 /**
  * Whether `subscribe`'s server push is working. "unavailable": the channel
  * couldn't be joined or was lost; the app's 30 s polls still keep data current.
@@ -72,17 +87,18 @@ export interface TavroApi {
    * fails validation is left out instead of failing the list; what was left
    * out is reported through `sessionList`.
    */
-  listSessions(): Promise<SessionRow[]>;
-  getSession(id: string): Promise<SessionRow | null>;
-  listEvents(sessionId: string, limit?: number): Promise<SessionEventRow[]>;
-  listMessages(sessionId: string, limit?: number): Promise<SessionMessageRow[]>;
+  listSessions(options?: ReadOptions): Promise<SessionRow[]>;
+  getSession(id: string, options?: ReadOptions): Promise<SessionRow | null>;
+  listEvents(sessionId: string, limit?: number, options?: ReadOptions): Promise<SessionEventRow[]>;
+  listMessages(sessionId: string, limit?: number, options?: ReadOptions): Promise<SessionMessageRow[]>;
 
-  listHosts(): Promise<HostRow[]>;
-  createHostPairing(name: string): Promise<PairingTicket>;
-  revokeHost(hostId: string): Promise<void>;
+  listHosts(options?: ReadOptions): Promise<HostRow[]>;
+  /** The code pairs a laptop to whichever account sent the request, so the app always pins it (L1). */
+  createHostPairing(name: string, options?: ReadOptions): Promise<PairingTicket>;
+  revokeHost(hostId: string, options?: ReadOptions): Promise<void>;
 
-  getNotificationPrefs(): Promise<NotificationPrefs | null>;
-  saveNotificationPrefs(prefs: NotificationPrefs): Promise<void>;
+  getNotificationPrefs(options?: ReadOptions): Promise<NotificationPrefs | null>;
+  saveNotificationPrefs(prefs: NotificationPrefs, options?: ReadOptions): Promise<void>;
 
   /** Server-pushed change notifications. Returns an unsubscribe function. */
   subscribe(cb: (topic: ChangeTopic) => void): () => void;
@@ -91,6 +107,9 @@ export interface TavroApi {
   /** What the latest session list left out. Absent where nothing reports it (test doubles): treated as complete. */
   readonly sessionList?: SessionListInfo;
 }
+
+/** A request pinned to one user found another account's sign-in stored on this device. */
+export const ACCOUNT_CHANGED_MESSAGE = "This browser is now signed in to a different account. Reload the page to continue.";
 
 /**
  * Errors safe to show to users (no secrets, no SQL). `misconfigured`: the
@@ -103,7 +122,9 @@ export class ApiError extends Error {
     // "unavailable": no answer or a 5xx (network failure, timeout, CORS-blocked
     // response). "paused": the Supabase project said it is paused (HTTP 540).
     // "rate_limited": HTTP 429; retrying straight away only prolongs it.
-    readonly code: "unauthorized" | "misconfigured" | "forbidden" | "not_found" | "invalid" | "unavailable" | "paused" | "rate_limited" | "unknown",
+    // "account_changed": a request pinned to one user (ReadOptions.asUser)
+    // found another account signed in, so nothing was sent.
+    readonly code: "unauthorized" | "misconfigured" | "forbidden" | "not_found" | "invalid" | "unavailable" | "paused" | "rate_limited" | "account_changed" | "unknown",
   ) {
     super(message);
     this.name = "ApiError";

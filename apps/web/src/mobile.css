@@ -62,6 +62,20 @@ html {
     margin-inline: calc(-1 * var(--sp-4)); padding-inline: var(--sp-4);
   }
   .state-chips > * { flex: none; }
+  /* The strip clips its overflow on both axes, so leave room for the 4px focus ring
+     above and below, and stop a focused chip flush against the screen edge. */
+  .state-chips { padding-block: 4px; margin-block: calc(var(--sp-2) - 4px) -4px; scroll-padding-inline: var(--sp-4); }
+}
+
+/* Phones (320–479px): one select per row once Filters is open, so "Sort: Needs attention
+   first" and long host names aren't cut to a few letters in a half-width select. */
+@media (max-width: 479px) {
+  .filters-panel.open { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* The sticky side column (session page, 900px+) stays below the top bar's safe-area padding too. */
+@media (min-width: 900px) {
+  .detail-side { top: calc(var(--topbar-h) + env(safe-area-inset-top) + var(--sp-4)); }
 }
 
 /* Backend indicator states (connectionIndicator); colour plus text, never colour alone. */

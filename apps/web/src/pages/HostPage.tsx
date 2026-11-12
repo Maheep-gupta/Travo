@@ -1,6 +1,6 @@
 import { Link, useParams } from "react-router";
 import type { HostRow } from "@mc/contracts";
-import { buildHostView, hostSourceOk, pageAvailability, relativeTime, syncWithRefreshes, type HostConnectivity } from "@mc/domain";
+import { buildHostView, hostSourceOk, pageAvailability, relativeTime, sourceFailureText, syncWithRefreshes, type HostConnectivity } from "@mc/domain";
 import { useApi } from "../api-context.js";
 import { ConnectivityBadge, DemoTag, EmptyState, ErrorState, MissingDataNotice, RefreshFailedNotice, SessionListSkeleton, TruncatedNotice } from "../components.js";
 import { useConnection, useHosts, useNow, useSessionViews } from "../hooks.js";
@@ -183,10 +183,20 @@ const CONNECTION_TEXT: Record<HostConnectivity, string> = {
 /** A source failure is only current while the host is online; otherwise it is the last report. */
 function SourceState({ host, connectivity, now }: { host: HostRow; connectivity: HostConnectivity; now: Date }) {
   if (!hostSourceOk(host)) {
+    // Schema v4 category: what failed and what to do; generic when not reported.
+    // The start time is the failure's: the category may have changed since, so it isn't tied to it.
+    const failure = sourceFailureText(host.provider_error_kind);
     return (
       <span className="host-warning">
-        <IconAlert /> Can't read its sessions since {relativeTime(host.provider_error_since, now)}.
-        {connectivity === "online" ? " Their status may be out of date until it recovers." : " Last report before the host stopped responding."}
+        <IconAlert />
+        <span>
+          <strong>{failure.summary}.</strong> {failure.title}. Its sessions haven't updated since {relativeTime(host.provider_error_since, now)}
+          {connectivity === "online" ? (
+            <>, so their status may be out of date until it recovers. {failure.guidance}</>
+          ) : (
+            ". Last report before the host stopped responding."
+          )}
+        </span>
       </span>
     );
   }

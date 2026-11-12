@@ -10,6 +10,7 @@ import {
   pairingPollInterval,
   pairingStatus,
   relativeTime,
+  sourceFailureText,
   summariseByHost,
   type HostSessionSummary,
   type PairingStatus,
@@ -22,6 +23,7 @@ import { FreshnessNote } from "./DashboardPage.js";
 
 export function HostsPage() {
   const api = useApi();
+  const userId = useUserId();
   const now = useNow();
   const hosts = useHosts();
   const sessions = useSessionViews();
@@ -37,7 +39,8 @@ export function HostsPage() {
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
 
   const pair = useMutation({
-    mutationFn: (hostName: string) => api.createHostPairing(hostName),
+    // Pinned: the code pairs the laptop to whichever account sends it (L1).
+    mutationFn: (hostName: string) => api.createHostPairing(hostName, { asUser: userId }),
     onSuccess: (t) => {
       setTicket(t);
       setCopy("idle");
@@ -46,7 +49,7 @@ export function HostsPage() {
     },
   });
   const revoke = useMutation({
-    mutationFn: (hostId: string) => api.revokeHost(hostId),
+    mutationFn: (hostId: string) => api.revokeHost(hostId, { asUser: userId }),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["hosts"] }),
   });
 
@@ -112,11 +115,7 @@ export function HostsPage() {
                     {api.kind === "demo" && <DemoTag />}
                     <ConnectivityBadge connectivity={c} />
                   </div>
-                  {c === "online" && !hostSourceOk(h) && (
-                    <p className="host-warning" role="note">
-                      <IconAlert /> Can't read its sessions since {relativeTime(h.provider_error_since, now)}. Their status may be out of date until it recovers.
-                    </p>
-                  )}
+                  {c === "online" && !hostSourceOk(h) && <SourceWarning host={h} now={now} />}
                   <dl className="facts">
                     <div>
                       <dt>Last seen</dt>
@@ -175,6 +174,9 @@ export function HostsPage() {
       ) : (
         <EmptyState title="No hosts paired yet" icon={<IconHost />}>
           <p>Pair the laptop where Claude Code runs to start seeing its sessions here.</p>
+          <Link to="/setup" className="btn ghost">
+            Setup checklist
+          </Link>
         </EmptyState>
       )}
 
@@ -228,6 +230,21 @@ export function HostsPage() {
   );
 }
 
+/** A failing source on an online host: effect, cause and start, with the guidance one tap away on its page. */
+function SourceWarning({ host, now }: { host: HostRow; now: Date }) {
+  const failure = sourceFailureText(host.provider_error_kind);
+  return (
+    <p className="host-warning" role="note">
+      <IconAlert />
+      <span>
+        {/* The start time is the failure's: the category may have changed since, so it isn't tied to it. */}
+        <strong>{failure.summary}.</strong> {failure.title}. Its sessions haven't updated since {relativeTime(host.provider_error_since, now)}, so their
+        status may be out of date. <Link to={`/hosts/${host.id}`} aria-label={`What to do about ${host.name}`}>What to do</Link>
+      </span>
+    </p>
+  );
+}
+
 /** "3 · last active 5m ago". Session counts load separately from hosts, so say when they're unavailable. */
 function sessionSummary(summaries: Map<string, HostSessionSummary> | null, loading: boolean, hostId: string, now: Date): string {
   if (!summaries) return loading ? "Loading…" : "Unavailable";
@@ -256,7 +273,7 @@ function PairingConfirmation({ ticket }: { ticket: PairingTicket }) {
   const now = useNow(PAIRING_CLOCK_MS);
   const hosts = useQuery({
     queryKey: userKey(api, userId, "hosts"),
-    queryFn: () => api.listHosts(),
+    queryFn: () => api.listHosts({ asUser: userId }),
     refetchInterval: (query) => pairingPollInterval(pairingStatus(ticket, query.state.data?.find((h) => h.id === ticket.host_id), new Date()), ticket, new Date()),
   });
   const host = hosts.data?.find((h) => h.id === ticket.host_id);

@@ -1,11 +1,13 @@
 /** What the owner has to do about a refusal; picks the connector's advice. */
-export type HostAuthRemedy = "pair_again" | "check_publishable_key";
+export type HostAuthRemedy = "pair_again" | "check_publishable_key" | "apply_migrations";
 
 /**
  * The backend answered and refused this host: its login was rejected, the
- * host was revoked (remedy "pair_again"), or the project rejected the
+ * host was revoked (remedy "pair_again"), the project rejected the
  * publishable key itself (remedy "check_publishable_key": re-pairing can't
- * fix a rotated or mistyped key in .env). Retrying soon can't fix either.
+ * fix a rotated or mistyped key in .env), or the project's database is older
+ * than this connector and has no heartbeat it can call (remedy
+ * "apply_migrations", PGRST202). Retrying soon can't fix any of them.
  * Kept apart from network failures (which stay "offline" with normal backoff)
  * so a revoked host neither hammers the backend nor looks merely offline.
  * Messages are fixed text plus a status or code: never credentials.

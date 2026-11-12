@@ -277,7 +277,7 @@ describe("dashboard: sessions loaded, hosts failed", () => {
     fireEvent.click(screen.getByRole("button", { name: "Disconnected: unknown while host status isn't loaded" }));
 
     const empty = await screen.findByRole("heading", { name: "Can't tell right now" }, T);
-    const state = empty.closest("[role=status]") as HTMLElement;
+    const state = empty.closest("[role=group]") as HTMLElement;
     expect(state.textContent).toContain("Host status isn't loaded, so Tavro can't tell which sessions are disconnected right now.");
     expect(screen.queryByRole("heading", { name: "Nothing matches" })).toBeNull();
     expect(document.body.textContent).not.toMatch(/No sessions match/);

@@ -3,7 +3,7 @@
 Owned by the product-manager role. Update this file after every unit of work (see `/tavro-ship`).
 Status: ✅ done and verified · 🟡 in progress · ⬜ planned · ⛔ blocked · 🔒 needs user approval.
 
-**Last updated:** 2026-11-03
+**Last updated:** 2026-11-12
 
 ## Product goal
 
@@ -13,16 +13,27 @@ Users can trust Tavro to tell them what their AI coding sessions are doing and w
 
 The requirements source is `docs/PRODUCT_SPEC.md`. Status for every requirement is in `docs/GAP_ANALYSIS.md`; the gap numbers (G#) below refer to it.
 
-**Next cycle** (G numbers are in GAP_ANALYSIS; session continuity is in `docs/EXECUTION_STATE.md`):
-Remaining local gaps, in priority order:
-1. **G27, diagnostics:**
-   - provider failure categories reach the UI (needs a DB contract change, so design it first);
-   - a Settings diagnostics section with "copy report".
-2. **G29:** a guided setup checklist.
-3. **G30:** the remaining mobile items.
-4. **G33:** a control border contrast decision.
-5. **G32 rest:** backlog items L2, L3, I1 and I3.
-6. **G24:** a transition model.
+**Next cycle.** Every prioritized local gap (G13–G33) is now closed in code. What's left is mostly blocked or needs founder approval (see *Blocked / needs approval*). Local candidates, in priority order:
+1. **A manual browser and phone pass by the user** (GAP "Founder decisions pending" 6). It covers: the filter disclosure, the iOS status bar and notch, control borders in dark mode, `/setup` at 320px, and screen-reader output.
+2. **Mobile leftovers from G30:** hover styles stick after a tap; the iOS tap-highlight box.
+3. **Enforce `asUser` by type:** the API still accepts unpinned calls. Use shared query-option factories, or make the option required.
+4. **Backlog:** host credentials in the OS credential store (SECURITY gap 2); a cleanup Edge Function for revoked hosts (gap 4); a retention purge (G28).
+
+**Done 2026-11-12 (seventh cycle):**
+- **G27, diagnostics (D-026):**
+  - Schema v4 adds `hosts.provider_error_kind`, a fixed category list checked by a constraint and written only by `host_heartbeat`. v3 connectors keep working.
+  - A v4 connector meeting a v3 project gets a clear "apply migrations" error.
+  - Host, Hosts and Session pages show a summary, a title and guidance.
+  - Settings has a Diagnostics section with "Copy report", built from an allowlist (tested to leak nothing).
+- **G29:** the `/setup` checklist, a first-run preview, a dashboard "Continue setup" line, and the Settings tab highlighted on `/setup`.
+- **G30:** filter disclosure, timeline fold, safe areas, chip focus rings, 44px small buttons.
+- **G33:** a `--control-line` token at ≥3:1, enforced by a test.
+- **G32:** L2 (exact-match sign-in sweep), L3 (every read and write pinned to the JWT `sub`, failing closed with `account_changed`; offline retry), I1 and I3. Older backlog items M2 and L3 turned out to be already done.
+- **G24 (D-027):** a transition model with tests over all 49 pairs. After a status goes to "unknown", it alerts again only when `last_activity_at` moved on, so dismissed alerts don't come back.
+- **Reviews:** QA, security and designer reviewed the integrated tree. No Critical findings.
+  - QA High: a second approval after "unknown" raised no alert. Fixed.
+  - Every Medium and Low finding from QA, security and design was fixed, except the two G30 leftovers above.
+- **Verified:** `npm run check:release` passes: 1349 tests (79 SQL-level), the build, and 242.7 of 270 kB gzip. `test:db`, `test:e2e` and browser or device checks were not run (blocked).
 
 **Done 2026-11-03 (sixth cycle):**
 - **G22:** unknown chips, plus an honest "can't tell" state when a chip is filtered.
@@ -235,15 +246,7 @@ See the release checklist in docs/QUALITY.md.
 ## Backlog (unscheduled)
 
 - From the auth security review (2026-11-02):
-  - **M2:** keeping alert history after an expired sign-in is best-effort. With two tabs open, or when auth-js fails a refresh, the history is cleared, which errs on the safe side. Also, A's alert metadata stays in storage if B signs in after A's session expires. Fix: remember the last user id and clear on a different user.
-  - **L1:** a gateway 401 for a rotated publishable key also looks like an expired sign-in.
-  - **L3:** no tests yet for a slow getUser racing an auth event, for multiple tabs, or for alerts kept on expiry.
-
-- From the security re-check (2026-11-03), all Low with no cross-project leak:
-  - **L2:** a project's stored sign-in can outlive leaving it when another tab signs back in to it. Fix: when a backend is created, sweep the other `tavro.auth:*` keys (needs a web-only key listing).
-  - **L3:** the AlertWatcher owner guard passes empty lists, and doesn't check prefs. Fix: tie each result to the JWT `sub` that was actually sent.
-  - **I1:** `close()` doesn't await async storage. That matters for the future Expo app.
-  - **I3:** a dev-only orphaned client under StrictMode.
+  - **L1:** a gateway 401 for a rotated publishable key also looks like an expired sign-in. (M2 and L3 from this review are done; see 2026-11-12.)
 - Host credentials in the OS credential store instead of a JSON file (SECURITY gap 2).
 - Cleanup Edge Function for revoked host Auth users (SECURITY gap 4).
 

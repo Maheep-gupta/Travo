@@ -18,6 +18,10 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Tavro" />
+    <!-- iOS home-screen app (M9): "default" keeps the page below the status bar, so the notch
+         never covers the top bar. "black-translucent" was rejected: its status-bar text is always
+         white, unreadable over the Light theme. Whether iOS tints the bar from theme-color above
+         (synced to the chosen theme in src/theme.ts) is unverified until checked on a device. -->
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   </head>
   <body>

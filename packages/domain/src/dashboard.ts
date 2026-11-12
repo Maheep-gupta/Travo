@@ -146,6 +146,15 @@ export function isFiltering(filter: DashboardFilter): boolean {
 }
 
 /**
+ * How many of the settings behind the dashboard's narrow-screen "Filters"
+ * disclosure (host, project, integration, sort) differ from the default, so the
+ * closed button can say something is set behind it (mobile review H4b).
+ */
+export function collapsedFilterCount(filter: DashboardFilter): number {
+  return [filter.host, filter.project, filter.provider, filter.sort !== DEFAULT_SESSION_SORT].filter(Boolean).length;
+}
+
+/**
  * Applies every filter (they compose) and the chosen sort. A legacy `group`
  * and a `state` that don't overlap match nothing rather than everything.
  */

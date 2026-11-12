@@ -1,5 +1,6 @@
 import type { ProviderId, SessionStatus, SessionEventType } from "@mc/contracts";
 import { attentionRank, type DisplayStatus } from "./status.js";
+import { decideTransition, initialRecord, type TransitionRecord } from "./transitions.js";
 
 export interface SessionFilter {
   statuses?: readonly DisplayStatus[];
@@ -178,8 +179,12 @@ export interface SessionTransition {
 
 /**
  * Compares the previously known statuses with a new observation and returns
- * the events to record. Dedupe keys are deterministic per (session, status,
- * observation time) so a retried write cannot create duplicate events.
+ * the events to record, by the transition model (transitions.ts). The log
+ * records what was observed, so a status the source couldn't tell ("unknown")
+ * is logged too; alerts treat it as lost evidence instead. Dedupe keys are
+ * deterministic per (session, status, observation time) so a retried write
+ * cannot create duplicate events. `current` must be a complete, successful
+ * read: sessions missing from it are ended. A failed read never gets here.
  */
 export function diffObservations(
   previous: ReadonlyMap<string, SessionStatus>,
@@ -189,17 +194,22 @@ export function diffObservations(
   const at = observedAt.toISOString();
   const events: SessionTransition[] = [];
   const seen = new Set<string>();
+  // Observation times aren't kept here: ordering is the write guard's job
+  // (schema v3), and only rows the backend kept get their events.
+  const record = (status: SessionStatus | undefined): TransitionRecord | null => (status === undefined ? null : initialRecord(status, null));
   for (const s of current) {
     seen.add(s.external_id);
-    const before = previous.get(s.external_id);
-    if (before === undefined) {
+    const d = decideTransition(record(previous.get(s.external_id)), { kind: "listed", status: s.status, observedAt: at });
+    if (d.outcome === "transition" && d.edge === "discovered") {
       events.push({ external_id: s.external_id, type: "session_discovered", status: s.status, dedupe_key: `discovered` });
-    } else if (before !== s.status) {
+    } else if (d.outcome === "transition" || d.outcome === "evidence") {
       events.push({ external_id: s.external_id, type: "status_changed", status: s.status, dedupe_key: `status:${s.status}:${at}` });
     }
   }
   for (const [externalId, before] of previous) {
-    if (!seen.has(externalId) && before !== "ended") {
+    if (seen.has(externalId)) continue;
+    // Not listed by a complete read: negative evidence, so the session ended (never "completed").
+    if (decideTransition(record(before), { kind: "absent", observedAt: at }).outcome === "transition") {
       events.push({ external_id: externalId, type: "session_ended", status: "ended", dedupe_key: `ended:${at}` });
     }
   }

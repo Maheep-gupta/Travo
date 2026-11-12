@@ -191,13 +191,24 @@ export function useLiveUpdatesStatus(): LiveUpdatesStatus | null {
 export function useHosts() {
   const api = useApi();
   const userId = useUserId();
-  return useQuery({ queryKey: userKey(api, userId, "hosts"), queryFn: () => api.listHosts() });
+  return useQuery({ queryKey: userKey(api, userId, "hosts"), queryFn: () => api.listHosts({ asUser: userId }) });
+}
+
+/**
+ * The signed-in user's saved alert preferences (null: never saved). Shares its
+ * key with AlertWatcher's observer, which filters alerts by it, and is pinned
+ * the same way: another account's "nothing saved" must not stand for this user's.
+ */
+export function usePrefs() {
+  const api = useApi();
+  const userId = useUserId();
+  return useQuery({ queryKey: userKey(api, userId, "prefs"), queryFn: () => api.getNotificationPrefs({ asUser: userId }) });
 }
 
 function useSessionList() {
   const api = useApi();
   const userId = useUserId();
-  return useQuery({ queryKey: userKey(api, userId, "sessions", "list"), queryFn: () => api.listSessions() });
+  return useQuery({ queryKey: userKey(api, userId, "sessions", "list"), queryFn: () => api.listSessions({ asUser: userId }) });
 }
 
 /** What the latest session list left out; null where the backend doesn't report it or no list has loaded. */

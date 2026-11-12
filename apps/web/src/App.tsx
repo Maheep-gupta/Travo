@@ -27,6 +27,7 @@ const HostPage = retryableLazy(() => import("./pages/HostPage.js").then((m) => m
 const AlertsPage = retryableLazy(() => import("./pages/AlertsPage.js").then((m) => m.AlertsPage));
 const SettingsPage = retryableLazy(() => import("./pages/SettingsPage.js").then((m) => m.SettingsPage));
 const SetupPage = retryableLazy(() => import("./pages/SetupPage.js").then((m) => m.SetupPage));
+const SetupChecklistPage = retryableLazy(() => import("./pages/SetupChecklistPage.js").then((m) => m.SetupChecklistPage));
 const SignInPage = retryableLazy(() => import("./pages/SignInPage.js").then((m) => m.SignInPage));
 
 export function App() {
@@ -125,6 +126,29 @@ function AuthGate() {
   useEffect(() => {
     // Demo data has no real session and never expires.
     if (api.kind === "demo") return;
+    let alive = true;
+    // Set while a failed read of the stored sign-in waits for the network to return.
+    let offOnline: (() => void) | null = null;
+    // Another tab signed in to another account. Its auth event normally
+    // follows at once; follow the stored sign-in in case none comes. If that
+    // read fails (offline), the pinned queries keep refusing with their
+    // "reload" message, and it is tried again when the browser is back online
+    // or the next of them is refused.
+    const followStoredSignIn = (signedIn: AuthUser) => {
+      api.getUser().then(
+        (u) => alive && current.current === signedIn && setUser(u),
+        () => {
+          if (!alive || offOnline) return;
+          const retry = () => {
+            offOnline?.();
+            offOnline = null;
+            if (alive && current.current === signedIn) followStoredSignIn(signedIn);
+          };
+          window.addEventListener("online", retry);
+          offOnline = () => window.removeEventListener("online", retry);
+        },
+      );
+    };
     const offQueries = queryClient.getQueryCache().subscribe((e) => {
       if (e.type !== "updated" || e.action.type !== "error") return;
       const error = e.action.error;
@@ -135,12 +159,18 @@ function AuthGate() {
         setKeyRejected(error);
         return;
       }
+      if (error.code === "account_changed") {
+        followStoredSignIn(signedIn);
+        return;
+      }
       if (error.code !== "unauthorized") return;
       setExpired(true);
       setUser(null);
       api.signOut({ localOnly: true }).catch(() => undefined);
     });
     return () => {
+      alive = false;
+      offOnline?.();
       offQueries();
     };
   }, [api, queryClient, setUser]);
@@ -287,7 +317,7 @@ const NAV = [
   { to: "/", label: "Sessions", icon: <IconSessions />, match: (p: string) => p === "/" || p.startsWith("/sessions/") },
   { to: "/alerts", label: "Alerts", icon: <IconBell />, match: (p: string) => p.startsWith("/alerts") },
   { to: "/hosts", label: "Hosts", icon: <IconHost />, match: (p: string) => p.startsWith("/hosts") },
-  { to: "/settings", label: "Settings", icon: <IconSettings />, match: (p: string) => p.startsWith("/settings") },
+  { to: "/settings", label: "Settings", icon: <IconSettings />, match: (p: string) => p.startsWith("/settings") || p.startsWith("/setup") },
 ];
 
 /**
@@ -386,6 +416,7 @@ function Shell() {
               <Route path="/hosts" element={<HostsPage />} />
               <Route path="/hosts/:id" element={<HostPage />} />
               <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/setup" element={<SetupChecklistPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>

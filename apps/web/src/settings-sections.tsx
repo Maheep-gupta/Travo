@@ -1,20 +1,21 @@
 // Settings sections that report rather than configure (spec 12): Account,
-// Privacy and data, Integrations, Application. Every control here does what
-// it says; anything Tavro can't change yet is shown as information instead.
+// Privacy and data, Integrations, Application and Diagnostics. Every control
+// here does what it says; anything Tavro can't change yet is shown as
+// information instead.
 import { useContext, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { LiveUpdatesStatus } from "@mc/api-client/demo";
-import { MAX_SCHEMA_VERSION } from "@mc/contracts/constants";
-import { MAX_STORED_ALERTS } from "@mc/domain";
+import { MAX_SCHEMA_VERSION, MIN_SCHEMA_VERSION } from "@mc/contracts/constants";
+import { MAX_STORED_ALERTS, buildDiagnosticsReport, type DiagnosticsList, type SourceState } from "@mc/domain";
 import { forgetAlerts, useAlertStore } from "./alerts-context.js";
 import { useApi, useApiContext } from "./api-context.js";
 import { APP_VERSION, BUILD_MODE, installState, type InstallState } from "./app-info.js";
 import { Notice } from "./components.js";
-import { SignOutReportContext, useLiveUpdatesStatus, useUserId } from "./hooks.js";
+import { SignOutReportContext, useConnection, useHosts, useLiveUpdatesStatus, usePrefs, useSessionViews, useStatusClock, useUserId } from "./hooks.js";
 import { IconCheck } from "./icons.js";
 import { clearLocalTavroData } from "./local-data.js";
 import { webStorage } from "./platform.js";
-import { SESSION_NAMES_OPTION_APPROVED } from "./system-notifications.js";
+import { SESSION_NAMES_OPTION_APPROVED, loadSystemNotificationsEnabled, systemNotificationState } from "./system-notifications.js";
 import { applyThemePreference } from "./theme.js";
 
 function hostOf(url: string): string {
@@ -189,8 +190,9 @@ export function PrivacyCard({ onCleared }: { onCleared: () => void }) {
                 </li>
                 <li>Status history: each change's status, a short summary and when it happened.</li>
                 <li>
-                  Hosts: name, platform, connector version, the organisation's remote-control policy, heartbeat and session-source health times, and when it
-                  was paired or revoked. Pairing codes are kept only as hashes.
+                  Hosts: name, platform, connector version, the organisation's remote-control policy, heartbeat and session-source health times, the
+                  category of a source failure (such as "CLI not found", never its messages), and when it was paired or revoked. Pairing codes are kept
+                  only as hashes.
                 </li>
                 <li>Which alert types you want.</li>
               </ul>
@@ -356,6 +358,135 @@ export function ApplicationCard() {
         </li>
       </ul>
       <p className="muted settings-small">Installed or not, notifications only arrive while Tavro is open.</p>
+    </section>
+  );
+}
+
+type CopyState = "idle" | "copying" | "copied" | "manual" | "error";
+
+/** A list query as the diagnostics report describes it (spec 3.5 states). */
+function listOf<T>(state: SourceState, items: readonly T[] | undefined): DiagnosticsList<T> {
+  if (state === "failed") return { state: "failed" };
+  if (state === "loading" || items === undefined) return { state: "loading" };
+  return { state: "ready", items, stale: state === "refresh_failed" };
+}
+
+/**
+ * Settings > Diagnostics (spec Part 12, area 10): a plain-text report for a
+ * support request. buildDiagnosticsReport decides what may go in it (no names,
+ * titles, project URL, keys or tokens); this card only gathers the inputs
+ * from what the app already has, and copies or shows the text.
+ */
+export function DiagnosticsCard() {
+  const api = useApi();
+  const schema = useQuery({ queryKey: ["schema", api.kind], queryFn: () => api.getSchemaVersion(), staleTime: Infinity });
+  const prefs = usePrefs();
+  const hosts = useHosts();
+  const views = useSessionViews();
+  const connection = useConnection(useStatusClock());
+  const [copy, setCopy] = useState<CopyState>("idle");
+  const [report, setReport] = useState<string | null>(null);
+  const textRef = useRef<HTMLTextAreaElement>(null);
+  const stillLoading = schema.isLoading || prefs.isLoading || views.isLoading;
+
+  // When the automatic copy isn't possible, select the text so one keystroke copies it.
+  useEffect(() => {
+    if (copy === "manual") textRef.current?.select();
+  }, [copy, report]);
+
+  async function collect(): Promise<string> {
+    // Names only; buildDiagnosticsReport strips user ids and project refs from them.
+    let storageKeys: readonly string[] | null;
+    try {
+      storageKeys = webStorage.keys ? await webStorage.keys() : null;
+    } catch {
+      storageKeys = null;
+    }
+    return buildDiagnosticsReport({
+      generatedAt: new Date(),
+      appVersion: APP_VERSION,
+      buildMode: BUILD_MODE,
+      runningAs: INSTALL_LABEL[installState()],
+      backend: api.kind === "demo" ? "demo" : "supabase",
+      schema: schema.isError ? { state: "failed" } : schema.data === undefined ? { state: "loading" } : { state: "ready", version: schema.data },
+      supportedSchema: { min: MIN_SCHEMA_VERSION, max: MAX_SCHEMA_VERSION },
+      connection,
+      // Read when the report is made, not subscribed to: the Application card already is.
+      liveUpdates: api.liveUpdates?.status() ?? null,
+      hosts: listOf(views.hosts, hosts.data),
+      sessions: { ...listOf(views.sessions, views.data), truncated: views.truncated },
+      notifications: {
+        permission: systemNotificationState(),
+        systemEnabled: loadSystemNotificationsEnabled(webStorage),
+        prefs: prefs.isError && prefs.data === undefined ? { state: "failed" } : prefs.data === undefined ? { state: "loading" } : { state: "ready", value: prefs.data },
+      },
+      storageKeys,
+    });
+  }
+
+  async function copyReport() {
+    setCopy("copying");
+    let text: string;
+    try {
+      text = await collect();
+    } catch {
+      // Building the report is pure; this only guards against an unexpected throw.
+      setReport(null);
+      setCopy("error");
+      return;
+    }
+    setReport(text);
+    try {
+      // Missing outside secure contexts and in some embedded browsers; may also be refused.
+      if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
+      await navigator.clipboard.writeText(text);
+      setCopy("copied");
+    } catch {
+      setCopy("manual");
+    }
+  }
+
+  async function showReport() {
+    const text = await collect().catch(() => null);
+    setReport(text);
+    setCopy(text === null ? "error" : "idle");
+  }
+
+  return (
+    <section className="card" aria-labelledby="h-diagnostics">
+      <div className="card-title">
+        <h2 id="h-diagnostics">Diagnostics</h2>
+      </div>
+      <p className="card-sub" id="diagnostics-sub">
+        A text report for a support request: versions, backend kind, connection state, each host's platform, connector and health, and session counts. It
+        never includes names, session titles, your project address, keys or sign-in tokens. Hosts appear as Host 1, Host 2.
+      </p>
+      {stillLoading && <p className="muted settings-small">Some details are still loading. The report says which.</p>}
+      <div className="row settings-actions">
+        <button type="button" className="btn" aria-describedby="diagnostics-sub" disabled={copy === "copying"} onClick={() => void copyReport()}>
+          {copy === "copying" ? "Copying…" : "Copy report"}
+        </button>
+        <button type="button" className="btn ghost" onClick={() => void showReport()}>
+          {report === null ? "Show report" : "Refresh report"}
+        </button>
+        <span role="status" aria-live="polite">
+          {copy === "copied" && (
+            <span className="inline-ok">
+              <IconCheck /> Copied
+            </span>
+          )}
+          {copy === "manual" && <span className="muted">Couldn't copy automatically. The report is selected below: copy it with Ctrl+C or ⌘C.</span>}
+          {copy === "error" && <span className="muted">Couldn't build the report. Try again.</span>}
+        </span>
+      </div>
+      {report !== null && (
+        <>
+          <span id="diagnostics-report-kind" className="sr-only">
+            report
+          </span>
+          <textarea ref={textRef} className="diagnostics-report mono" aria-labelledby="h-diagnostics diagnostics-report-kind" readOnly rows={14} value={report} />
+        </>
+      )}
     </section>
   );
 }

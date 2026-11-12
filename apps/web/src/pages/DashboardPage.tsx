@@ -12,6 +12,7 @@ import {
   STATUS_LABEL,
   applyDashboardFilter,
   buildHostView,
+  collapsedFilterCount,
   countByState,
   countsAsOf,
   dashboardHeadline,
@@ -26,6 +27,7 @@ import {
   parseDashboardFilter,
   projectOptions,
   relativeTime,
+  setupChecklist,
   trustedHostCount,
   unknownStateCounts,
   unknownStateMessage,
@@ -40,9 +42,10 @@ import {
 } from "@mc/domain";
 import { useAlerts } from "../alerts-context.js";
 import { useApi } from "../api-context.js";
-import { DemoTag, EmptyState, ErrorState, MissingDataNotice, PageHeader, RefreshFailedNotice, SessionListSkeleton, StatusBadge, TruncatedNotice } from "../components.js";
+import { DemoTag, EmptyState, ErrorState, MissingDataNotice, Notice, PageHeader, RefreshFailedNotice, SessionListSkeleton, StatusBadge, TruncatedNotice } from "../components.js";
 import { useConnection, useHosts, useNow, useSessionViews } from "../hooks.js";
-import { IconBell, IconClock, IconClose, IconFolder, IconHost, IconSearch, IconSessions } from "../icons.js";
+import { IconBell, IconChevron, IconClock, IconClose, IconFolder, IconHost, IconSearch, IconSessions } from "../icons.js";
+import { systemNotificationState } from "../system-notifications.js";
 import { dashboardFilterParams, noMatchMessage, unreadAlertsLabel } from "../view-model.js";
 
 const SORT_ORDER = Object.keys(SESSION_SORTS) as SessionSort[];
@@ -85,6 +88,11 @@ export function DashboardPage() {
   // trimmed query. When the URL changes another way (Back/Forward, a clear
   // button), the box follows it.
   const searchId = useId();
+  // Narrow screens fold the selects behind a "Filters" button (H4b); wide screens hide the button
+  // and always show them (styles.css), so this state only matters below 720px.
+  const filtersId = useId();
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const hiddenFilters = collapsedFilterCount(filter);
   const searchInput = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState(query);
   const [shownQuery, setShownQuery] = useState(query);
@@ -119,6 +127,19 @@ export function DashboardPage() {
     () => [...(hosts.data ?? [])].sort((a, b) => a.name.localeCompare(b.name, "en", { sensitivity: "base" }) || (a.id < b.id ? -1 : 1)),
     [hosts.data],
   );
+  // The setup nudge needs both lists settled: a count taken from a loading or failed list would understate progress.
+  const setup =
+    data && views.hosts !== "loading" && views.hosts !== "failed" && views.sessions !== "loading" && views.sessions !== "failed"
+      ? setupChecklist({
+          backend: api.kind,
+          signedIn: true,
+          hosts: { state: views.hosts, data: hosts.data ?? null },
+          sessions: { state: views.sessions, count: data.length, dropped: views.dropped },
+          sync: views.sync,
+          notifications: systemNotificationState(),
+          now,
+        })
+      : null;
   const filtered = applyDashboardFilter(data ?? [], filter);
   const filtering = isFiltering(filter);
   // The default order keeps the "Needs you" section; any other order is shown as one list, as chosen.
@@ -178,6 +199,13 @@ export function DashboardPage() {
             </MissingDataNotice>
           )}
           <RefreshFailedNotice failure={views.refresh} now={now} onRetry={views.refetch} />
+          {setup && !setup.complete && api.kind !== "demo" && (
+            <div className="section">
+              <Notice>
+                {setup.done} of {setup.total} setup steps done. <Link to="/setup">Continue setup</Link>
+              </Notice>
+            </div>
+          )}
           {asOf !== null && (
             <p className="counts-as-of">
               <IconClock />
@@ -255,57 +283,78 @@ export function DashboardPage() {
                 )}
               </div>
             </div>
-            <label>
-              <span className="sr-only">Host</span>
-              <select className="select" value={host ?? ""} onChange={(e) => update({ host: e.target.value || null }, "push")}>
-                <option value="">All hosts</option>
-                {/* A URL-selected host kept while the host list isn't loaded. */}
-                {host && !hostsReady && <option value={host}>{HOST_NOT_LOADED_OPTION}</option>}
-                {hostOptions.map((h) => (
-                  <option key={h.id} value={h.id}>
-                    {h.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span className="sr-only">Project</span>
-              <select className="select" value={project ?? ""} onChange={(e) => update({ project: e.target.value || null }, "push")}>
-                <option value="">All projects</option>
-                {/* Keep a URL-selected project visible even when no session uses it right now. */}
-                {(project && !projects.includes(project) ? [...projects, project] : projects).map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span className="sr-only">Integration</span>
-              <select
-                className="select"
-                value={provider ?? ""}
-                onChange={(e) => update({ provider: parseDashboardFilter(new URLSearchParams({ provider: e.target.value })).provider }, "push")}
-              >
-                <option value="">All integrations</option>
-                {/* Keep a URL-selected integration visible even when no session uses it right now. */}
-                {(provider && !providersPresent.includes(provider) ? [...providersPresent, provider] : providersPresent).map((p) => (
-                  <option key={p} value={p}>
-                    {PROVIDERS[p].label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span className="sr-only">Sort by</span>
-              <select className="select" value={sort} onChange={(e) => isSessionSort(e.target.value) && update({ sort: e.target.value }, "push")}>
-                {SORT_ORDER.map((s) => (
-                  <option key={s} value={s}>
-                    Sort: {SESSION_SORTS[s].label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <button
+              type="button"
+              className="btn filters-toggle"
+              aria-expanded={filtersOpen}
+              aria-controls={filtersId}
+              onClick={() => setFiltersOpen(!filtersOpen)}
+            >
+              Filters and sort
+              {/* Read as "Filters and sort, 2 set": the count of settings folded away. */}
+              {hiddenFilters > 0 && (
+                <>
+                  <span className="badge-count" aria-hidden="true">
+                    {hiddenFilters}
+                  </span>
+                  <span className="sr-only">{`, ${hiddenFilters} set`}</span>
+                </>
+              )}
+              <IconChevron className={`filters-chevron ${filtersOpen ? "open" : ""}`} />
+            </button>
+            <div id={filtersId} className={`filters-panel ${filtersOpen ? "open" : ""}`}>
+              <label>
+                <span className="sr-only">Host</span>
+                <select className="select" value={host ?? ""} onChange={(e) => update({ host: e.target.value || null }, "push")}>
+                  <option value="">All hosts</option>
+                  {/* A URL-selected host kept while the host list isn't loaded. */}
+                  {host && !hostsReady && <option value={host}>{HOST_NOT_LOADED_OPTION}</option>}
+                  {hostOptions.map((h) => (
+                    <option key={h.id} value={h.id}>
+                      {h.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="sr-only">Project</span>
+                <select className="select" value={project ?? ""} onChange={(e) => update({ project: e.target.value || null }, "push")}>
+                  <option value="">All projects</option>
+                  {/* Keep a URL-selected project visible even when no session uses it right now. */}
+                  {(project && !projects.includes(project) ? [...projects, project] : projects).map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="sr-only">Integration</span>
+                <select
+                  className="select"
+                  value={provider ?? ""}
+                  onChange={(e) => update({ provider: parseDashboardFilter(new URLSearchParams({ provider: e.target.value })).provider }, "push")}
+                >
+                  <option value="">All integrations</option>
+                  {/* Keep a URL-selected integration visible even when no session uses it right now. */}
+                  {(provider && !providersPresent.includes(provider) ? [...providersPresent, provider] : providersPresent).map((p) => (
+                    <option key={p} value={p}>
+                      {PROVIDERS[p].label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="sr-only">Sort by</span>
+                <select className="select" value={sort} onChange={(e) => isSessionSort(e.target.value) && update({ sort: e.target.value }, "push")}>
+                  {SORT_ORDER.map((s) => (
+                    <option key={s} value={s}>
+                      Sort: {SESSION_SORTS[s].label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
           </div>
           {/* Always mounted so the first filter change is announced; holds only the summary text. */}
           <p className="sr-only" role="status" aria-live="polite">
@@ -330,9 +379,14 @@ export function DashboardPage() {
               {hosts.data?.length === 0 ? (
                 <EmptyState title="No hosts paired yet" icon={<IconHost />}>
                   <p>Pair the laptop where Claude Code runs; its sessions appear here once its connector reports them.</p>
-                  <Link to="/hosts" className="btn">
-                    Pair a host
-                  </Link>
+                  <div className="row">
+                    <Link to="/setup" className="btn ghost">
+                      Setup checklist
+                    </Link>
+                    <Link to="/hosts" className="btn">
+                      Pair a host
+                    </Link>
+                  </div>
                 </EmptyState>
               ) : (
                 <EmptyState title="No sessions yet">
@@ -341,9 +395,14 @@ export function DashboardPage() {
                       ? "Sessions appear here once a paired connector reports them."
                       : `${onlineHosts} of ${hosts.data?.length ?? 0} paired ${hosts.data?.length === 1 ? "host is" : "hosts are"} online. Sessions appear here once a connector reports them.`}
                   </p>
-                  <Link to="/hosts" className="btn">
-                    View hosts
-                  </Link>
+                  <div className="row">
+                    <Link to="/setup" className="btn ghost">
+                      Setup checklist
+                    </Link>
+                    <Link to="/hosts" className="btn">
+                      View hosts
+                    </Link>
+                  </div>
                 </EmptyState>
               )}
             </div>

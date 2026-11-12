@@ -40,7 +40,7 @@ The adapter only reads. It sends nothing to Claude Code: no replies, approvals, 
 | `status: "idle"` | `waiting_for_input` | Idle at the prompt: the turn is finished or it's waiting for you. **Not** `completed`. |
 | Any other value, including `"BUSY"`, `" busy"`, numbers or `null` | `unknown`, with the fixed reason "Unrecognised status from the provider." The raw value is never quoted, because `status_reason` syncs to the cloud. | Never guessed: no case-folding or trimming. |
 | Session no longer listed after a **successful** read | `ended` (`status_source: "derived"`, event "Session closed") | Never `completed` (spec 4.1). The connector does this, not the provider. |
-| Read failed (any failure below) | Unchanged. The host reports `provider_ok = false`. | The dashboard shows "Source not responding" and raises `source_unavailable` (D-014). Nothing is marked ended. |
+| Read failed (any failure below) | Unchanged. The host reports `provider_ok = false` with the failure category (schema v4). | The dashboard shows "Source not responding" and raises `source_unavailable` (D-014); the host page names the cause and what to do (D-026). Nothing is marked ended. |
 | `Notification` hook with `permission_prompt` | `approval_required` | Not implemented. Needs approval to edit `~/.claude/settings.json`. |
 | `StopFailure` hook | `failed` | Not implemented. Needs hooks. |
 
@@ -104,7 +104,7 @@ There is no environment variable for the policy yet, because `config.ts` isn't p
 
 ### Failure diagnostics
 
-To the backend, every failure means `provider_ok = false`; the DB contract is unchanged. The connector logs the fixed message once per outage (`provider error: claude-code: …`) and `provider recovered` on the next good read. The error also carries `kind` and `category` (`ProviderFailureCategory` in `apps/connector/src/types.ts`) for a future diagnostics field.
+To the backend, every failure means `provider_ok = false`, and since schema v4 (D-026) the heartbeat also sends the failure's **category** as `provider_error_kind` (never the message). The connector heartbeats at once when the category changes, so the host page always shows the current cause with what to do (`sourceFailureText` in `packages/domain`). The connector logs the fixed message once per outage (`provider error: claude-code: …`) and `provider recovered` on the next good read. The error also carries `kind` for the `doctor` command and logs; `kind` never leaves the machine. Session writes the backend keeps skipping or refusing are reported as the connector's own category, `writes_not_applied` (D-015).
 
 | Category | Kinds | Example message (fixed text) |
 |---|---|---|

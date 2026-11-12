@@ -42,7 +42,7 @@ describe("anonymous (publishable key only)", () => {
   it("can read the schema version and nothing else", async () => {
     const anon = anonClient(env);
     const meta = await anon.from("app_meta").select("schema_version").single();
-    expect(meta.data?.schema_version).toBe(3);
+    expect(meta.data?.schema_version).toBe(4);
     for (const table of ["hosts", "sessions", "session_events", "session_messages", "notification_prefs", "host_pairings"]) {
       const r = await anon.from(table).select("*");
       // Either a permission error or zero rows; never data.
@@ -174,6 +174,24 @@ describe("host isolation", () => {
     expect(missing.error).not.toBeNull();
     // The v1 signature no longer exists.
     expect((await hostA.client.rpc("host_heartbeat", { p_platform: "x", p_connector_version: "x", p_remote_control_allowed: false })).error).not.toBeNull();
+  });
+
+  it("source failure categories (schema v4) go through the heartbeat only, and only known ones", async () => {
+    const beat = (ok: boolean, kind?: string | null) =>
+      hostA.client.rpc("host_heartbeat", { p_platform: "win32", p_connector_version: "t", p_remote_control_allowed: false, p_provider_ok: ok, p_provider_error_kind: kind });
+    const health = async () => (await ownerA.client.from("hosts").select("provider_error_since, provider_error_kind").eq("id", hostA.id).single()).data;
+
+    expect((await beat(false, "cli_missing")).error).toBeNull();
+    expect((await health())?.provider_error_kind).toBe("cli_missing");
+    expect((await beat(false, "not a category")).error?.code).toBe("22023");
+    expect((await beat(true, "timeout")).error?.code).toBe("22023");
+    expect((await beat(true, null)).error).toBeNull();
+    expect(await health()).toEqual({ provider_error_since: null, provider_error_kind: null });
+    // A v3 connector's call (no category) still resolves to the v4 function.
+    expect((await hostA.client.rpc("host_heartbeat", { p_platform: "win32", p_connector_version: "t", p_remote_control_allowed: false, p_provider_ok: true })).error).toBeNull();
+
+    const owner = await ownerA.client.from("hosts").update({ provider_error_kind: "timeout" }).eq("id", hostA.id).select("id");
+    expect(owner.error).not.toBeNull(); // no column UPDATE grant
   });
 
   it("nobody can write provider_error_since directly", async () => {

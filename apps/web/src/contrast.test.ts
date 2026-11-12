@@ -128,6 +128,14 @@ const PAIRS: readonly Pair[] = [
   // In the top bar (≈ bg, see color-mix note), as a static pill in Settings (surface), and hovered (surface-2).
   ...["muted", "demo", "st-working", "st-approval", "st-failed"].flatMap((fg) => SURFACES.map((bg) => ({ fg, bg, min: TEXT, why: ".env-pill tone" }))),
   { fg: "demo", bg: "surface-2", min: TEXT, why: ".tag.demo inside an expanded alert group" },
+  // Setup checklist (setup.css): --c is the mark's ring and glyph. neutral = upcoming/blocked, working = done,
+  // approval = unknown, accent = current on its tint (accent-soft over the card surface).
+  ...["neutral", "working", "approval"].map((s) => ({ fg: `st-${s}`, bg: "surface", min: NON_TEXT, why: ".setup-mark ring and glyph" })),
+  { fg: "accent", bg: "accent-soft", on: "surface", min: NON_TEXT, why: ".setup-step.ss-current mark" },
+  { fg: "accent", bg: "accent-soft", on: "surface", min: TEXT, why: "accent text on the current setup step" },
+  { fg: "text", bg: "accent-soft", on: "surface", min: TEXT, why: ".setup-state, title on the current step" },
+  { fg: "text-2", bg: "accent-soft", on: "surface", min: TEXT, why: ".setup-detail on the current step" },
+  { fg: "muted", bg: "surface", min: TEXT, why: ".setup-state (upcoming steps)" },
 
   // Non-text (1.4.11). The focus ring is 2px of --bg then 2px of --accent; its outer edge
   // meets whatever surface the control sits on, so --accent must stand out from each.
@@ -139,6 +147,14 @@ const PAIRS: readonly Pair[] = [
   // Status dots and hollow rings are always paired with a text label, but they are the fastest
   // read on a phone; hold them to 3:1 on the page and on cards.
   ...STATUSES.flatMap((s) => (["bg", "surface"] as const).map((bg) => ({ fg: `st-${s}`, bg, min: NON_TEXT, why: "status dot / hollow ring" }))),
+  // Control boundaries (G33): .input, .select, .btn, the unchecked .switch track and .state-chip
+  // draw their edge with --control-line. It meets the page, cards, notices and inputs' own fill
+  // (surface-2), and the warn/error notice tints that hold Retry buttons. --line-strong stays a
+  // lighter decorative rule (dividers, the timeline rail) and is not held to 3:1.
+  ...[...SURFACES, "surface-3"].map((bg) => ({ fg: "control-line", bg, min: NON_TEXT, why: "control boundary" })),
+  ...(["approval", "failed"] as const).flatMap((s) =>
+    (["bg", "surface"] as const).map((on) => ({ fg: "control-line", bg: `st-${s}-bg`, on, min: NON_TEXT, why: `control boundary inside .notice.${s === "approval" ? "warn" : "error"}` })),
+  ),
 ];
 
 /**
@@ -182,14 +198,14 @@ const MIX_PAIRS: readonly MixPair[] = [
  */
 
 /**
- * Reported, not enforced: control boundaries drawn with --line-strong (.input,
- * .select, .btn, the unchecked .switch track, .tag) are under 3:1 in both
- * themes. 1.4.11 needs 3:1 only where the boundary is what identifies the
- * control; these also have a visible label, text or a different fill. Raising
- * --line-strong to 3:1 would restyle every border in the app, so it is a design
- * decision. Pinned below so whoever changes it moves these into PAIRS.
+ * The rules whose border is a control's boundary, and the token it must use.
+ * Guards against a control going back to a decorative line (G33). .tag is not
+ * listed: it is a non-interactive label, and its text carries the meaning.
  */
-const REPORTED_BOUNDARIES: readonly Pair[] = SURFACES.map((bg) => ({ fg: "line-strong", bg, min: NON_TEXT, why: "control boundary (reported, not enforced)" }));
+const CONTROL_BORDER_RULES: readonly RegExp[] = [/\.btn/, /\.input, \.select/, /\.switch input/, /\.state-chip/, /\.env-pill/];
+
+/** .btn.danger mixes its border: color-mix(--st-failed 45%, --control-line). */
+const DANGER_BORDER_MIX = ["st-failed", 0.45, "control-line"] as const;
 
 const { dark, light, lightMap, systemMap } = themes(css);
 const THEMES = { dark, light } as const;
@@ -222,7 +238,7 @@ describe("contrast maths", () => {
 
 describe("theme parsing", () => {
   it("reads every live colour token in both themes", () => {
-    for (const name of ["bg", "surface", "surface-2", "surface-3", "text", "text-2", "muted", "faint", "accent", "accent-ink", "demo", ...STATUSES.flatMap((s) => [`st-${s}`, `st-${s}-bg`])]) {
+    for (const name of ["bg", "surface", "surface-2", "surface-3", "text", "text-2", "muted", "faint", "accent", "accent-ink", "demo", "control-line", ...STATUSES.flatMap((s) => [`st-${s}`, `st-${s}-bg`])]) {
       expect(() => colour(dark, name)).not.toThrow();
       expect(() => colour(light, name)).not.toThrow();
     }
@@ -256,7 +272,20 @@ describe.each(Object.keys(THEMES) as (keyof typeof THEMES)[])("%s theme", (name)
     expect(failures).toEqual([]);
   });
 
-  it("still has the reported --line-strong boundary gap (move it into PAIRS once fixed)", () => {
-    for (const p of REPORTED_BOUNDARIES) expect(ratioOf(theme, p), label(p)).toBeLessThan(p.min);
+  it("gives the .btn.danger mixed border 3:1 on the page, cards and notices", () => {
+    const [a, pct, b] = DANGER_BORDER_MIX;
+    const border = mix(colour(theme, a), pct, colour(theme, b));
+    const failures = SURFACES.map((bg) => ({ bg, ratio: Number(contrast(border, colour(theme, bg)).toFixed(3)) })).filter((r) => r.ratio < NON_TEXT);
+    expect(failures).toEqual([]);
+  });
+});
+
+describe("control boundaries (G33)", () => {
+  it("draw every control border with --control-line, not a decorative line", () => {
+    for (const selector of CONTROL_BORDER_RULES) {
+      const body = ruleBody(css, selector);
+      expect(body, selector.source).toMatch(/border:\s*1px solid var\(--control-line\)/);
+    }
+    expect(ruleBody(css, /\.btn\.danger/)).toContain(`color-mix(in srgb, var(--${DANGER_BORDER_MIX[0]}) ${DANGER_BORDER_MIX[1] * 100}%, var(--${DANGER_BORDER_MIX[2]}))`);
   });
 });

@@ -75,7 +75,8 @@ describe("per-project session storage", () => {
     await y.listSessions();
     await y.signOut();
     expect(leaksTo(Y, OLD_ACCESS, OLD_REFRESH)).toEqual([]);
-    expect(storage.getItem(authStorageKey(X))).not.toBeNull();
+    // Not kept either: creating Y removes other projects' sign-ins unread (L2).
+    expect(storage.getItem(authStorageKey(X))).toBeNull();
   });
 
   it("deletes the legacy shared key unread", async () => {

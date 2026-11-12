@@ -444,7 +444,7 @@ describe("Settings: privacy and data", () => {
     expect(text).toContain("stored in your own Supabase project");
     // Every synced field, as in the sessions and hosts tables.
     expect(text).toContain("title, project label, provider and its session id, status and status reason, last event summary, capabilities");
-    expect(text).toContain("name, platform, connector version, the organisation's remote-control policy, heartbeat and session-source health times");
+    expect(text).toContain("name, platform, connector version, the organisation's remote-control policy, heartbeat and session-source health times, the category of a source failure");
     expect(text).toContain("Which alert types you want.");
     expect(text).toContain("Alert types are saved with your data above, not here.");
     // D-013 isn't approved, so the names opt-in is neither listed nor promised.

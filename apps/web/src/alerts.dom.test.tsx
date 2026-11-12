@@ -6,7 +6,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useParams } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthUser, ChangeTopic, SignOutResult, TavroApi } from "@mc/api-client/demo";
+import { ACCOUNT_CHANGED_MESSAGE, ApiError, type AuthUser, type ChangeTopic, type ReadOptions, type SignOutResult, type TavroApi } from "@mc/api-client/demo";
 import type { HostRow, NotificationPrefs, PairingTicket, SessionEventRow, SessionMessageRow, SessionRow, SessionStatus } from "@mc/contracts";
 import { MAX_SCHEMA_VERSION } from "@mc/contracts/constants";
 import type { TavroAlert } from "@mc/domain";
@@ -70,6 +70,12 @@ class FakeApi implements TavroApi {
   /** Whose hosts the backend answers with (another tab's sign-in swaps the shared token). */
   hostsOwner = USER.id;
   prefs: NotificationPrefs | null = null;
+  /**
+   * Whose sign-in the shared storage holds. Another tab signing in to
+   * another account changes it before this tab hears: pinned reads are then
+   * refused, unpinned ones answer as that account (empty lists, no prefs).
+   */
+  storedUser = USER.id;
   private readonly authListeners = new Set<(user: AuthUser | null) => void>();
 
   getSchemaVersion(): Promise<number | null> {
@@ -94,7 +100,18 @@ class FakeApi implements TavroApi {
   emitAuth(user: AuthUser | null): void {
     for (const cb of this.authListeners) cb(user);
   }
-  listSessions(): Promise<SessionRow[]> {
+  /** What a read sees of the shared sign-in: an error, another account's view, or this user's. */
+  private answerAs(options: ReadOptions | undefined): "refused" | "other" | "user" {
+    if (options?.asUser !== undefined && options.asUser !== this.storedUser) return "refused";
+    return this.storedUser === USER.id ? "user" : "other";
+  }
+  private refused(): Promise<never> {
+    return Promise.reject(new ApiError(ACCOUNT_CHANGED_MESSAGE, "account_changed"));
+  }
+  listSessions(options?: ReadOptions): Promise<SessionRow[]> {
+    const as = this.answerAs(options);
+    if (as === "refused") return this.refused();
+    if (as === "other") return Promise.resolve([]);
     if (this.holdSessions) return new Promise(() => undefined);
     if (this.failSessions) return Promise.reject(new Error("sessions unavailable"));
     return Promise.resolve(this.sessions.map((s) => ({ ...s })));
@@ -108,7 +125,10 @@ class FakeApi implements TavroApi {
   listMessages(): Promise<SessionMessageRow[]> {
     return Promise.resolve([]);
   }
-  listHosts(): Promise<HostRow[]> {
+  listHosts(options?: ReadOptions): Promise<HostRow[]> {
+    const as = this.answerAs(options);
+    if (as === "refused") return this.refused();
+    if (as === "other") return Promise.resolve([]);
     if (this.holdHosts) return new Promise(() => undefined);
     if (this.failHosts) return Promise.reject(new Error("hosts unavailable"));
     // Seen just now, so the host counts as online whenever the list is fetched.
@@ -123,7 +143,11 @@ class FakeApi implements TavroApi {
   revokeHost(): Promise<void> {
     return Promise.reject(new Error("not used"));
   }
-  getNotificationPrefs(): Promise<NotificationPrefs | null> {
+  getNotificationPrefs(options?: ReadOptions): Promise<NotificationPrefs | null> {
+    const as = this.answerAs(options);
+    if (as === "refused") return this.refused();
+    // The other account never saved preferences: the defaults would apply.
+    if (as === "other") return Promise.resolve(null);
     return this.failPrefs ? Promise.reject(new Error("prefs unavailable")) : Promise.resolve(this.prefs);
   }
   saveNotificationPrefs(): Promise<void> {
@@ -180,6 +204,7 @@ function storedAlerts(): { id: string; read: boolean }[] {
 describe("AlertWatcher (via AlertsProvider)", () => {
   interface Counts {
     s: number;
+    sErr: number;
     h: number;
     hErr: number;
     p: number;
@@ -195,14 +220,16 @@ describe("AlertWatcher (via AlertsProvider)", () => {
     const a = useApi();
     const client = useQueryClient();
     // Subscribing re-renders this probe in the same batch as the watcher.
-    useQuery({ queryKey: userKey(a, USER.id, "sessions", "list"), queryFn: () => a.listSessions() });
-    useQuery({ queryKey: userKey(a, USER.id, "hosts"), queryFn: () => a.listHosts() });
-    useQuery({ queryKey: userKey(a, USER.id, "prefs"), queryFn: () => a.getNotificationPrefs() });
+    // Pinned like every observer of these keys in the app.
+    useQuery({ queryKey: userKey(a, USER.id, "sessions", "list"), queryFn: () => a.listSessions({ asUser: USER.id }) });
+    useQuery({ queryKey: userKey(a, USER.id, "hosts"), queryFn: () => a.listHosts({ asUser: USER.id }) });
+    useQuery({ queryKey: userKey(a, USER.id, "prefs"), queryFn: () => a.getNotificationPrefs({ asUser: USER.id }) });
     const sessions = client.getQueryState(userKey(a, USER.id, "sessions", "list"));
     const hosts = client.getQueryState(userKey(a, USER.id, "hosts"));
     const prefs = client.getQueryState(userKey(a, USER.id, "prefs"));
     const counts = JSON.stringify({
       s: sessions?.dataUpdateCount ?? 0,
+      sErr: sessions?.errorUpdateCount ?? 0,
       h: hosts?.dataUpdateCount ?? 0,
       hErr: hosts?.errorUpdateCount ?? 0,
       p: prefs?.dataUpdateCount ?? 0,
@@ -628,6 +655,47 @@ describe("AlertWatcher (via AlertsProvider)", () => {
     api.hostsOwner = USER.id;
     await refetch(["hosts"], (b, n) => n.h > b.h);
     expect(alertIds()).toEqual([approvalId(T1)]);
+  });
+
+  // Security re-check L3: the owner check above passes an empty list, and
+  // preferences carry no owner. Reads are pinned to this user instead, so
+  // another account's answers never reach the cache under this user's keys.
+  describe("another tab signs in to another account before this tab hears of it", () => {
+    const OTHER = "00000000-0000-4000-8000-000000000002";
+
+    it("never baselines that account's empty lists: only this user's real change alerts afterwards", async () => {
+      await initialLoad();
+
+      api.storedUser = OTHER;
+      await refetch(["sessions"], (b, n) => n.sErr > b.sErr);
+      await refetch(["hosts"], (b, n) => n.hErr > b.hErr);
+      expect(alertIds()).toEqual([]);
+      expect(storedAlerts()).toEqual([]);
+
+      // Back to this user's sign-in: S1 now needs approval. S2 already did at
+      // the baseline, so an empty baseline would wrongly make it new as well.
+      api.storedUser = USER.id;
+      api.sessions = [sessionRow(S1, "Fix login", "approval_required", T1), api.sessions[1] as SessionRow];
+      await refetch(["hosts"], (b, n) => n.h > b.h);
+      await refetch(["sessions"], (b, n) => n.s > b.s);
+      expect(alertIds()).toEqual([approvalId(T1)]);
+    });
+
+    it("never filters this user's alerts with that account's (unsaved, so default) preferences", async () => {
+      api.prefs = { on_waiting_for_input: true, on_approval_required: false, on_completed: true, on_failed: true, on_host_disconnected: true, on_host_reconnected: true };
+      await initialLoad();
+
+      api.storedUser = OTHER;
+      await refetch(["prefs"], (b, n) => n.pErr > b.pErr);
+      api.storedUser = USER.id;
+      api.sessions = [sessionRow(S1, "Fix login", "approval_required", T1), api.sessions[1] as SessionRow];
+      await refetch(["sessions"], (b, n) => n.s > b.s);
+      // Paused while preferences are unknown, then filtered by this user's own.
+      expect(alertIds()).toEqual([]);
+      await refetch(["prefs"], (b, n) => n.p > b.p);
+      expect(alertIds()).toEqual([]);
+      expect(storedAlerts()).toEqual([]);
+    });
   });
 
   // M2: auth-js reports expiry, a failed refresh and another tab's sign-out as

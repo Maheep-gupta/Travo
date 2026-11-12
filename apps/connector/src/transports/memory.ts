@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { OBSERVED_AT_MAX_SKEW_MS, type HeartbeatInput, type ProviderId, type SessionUpsert } from "@mc/contracts";
+import { HeartbeatInput, OBSERVED_AT_MAX_SKEW_MS, type ProviderId, type SessionUpsert } from "@mc/contracts";
 import type { EventInput, KnownSession, MessageInput, Transport } from "../types.js";
 import { TranscriptsRefusedError } from "./errors.js";
 
@@ -38,6 +38,9 @@ export class MemoryTransport implements Transport {
 
   async heartbeat(input: HeartbeatInput): Promise<void> {
     this.check();
+    // The contract's rule (HeartbeatInput): host_heartbeat (schema v4) refuses a
+    // category on a healthy source and accepts none on a failing one only from v3 connectors.
+    if (!HeartbeatInput.safeParse(input).success) throw new Error("heartbeat failed (22023)");
     this.heartbeats.push(input);
   }
 

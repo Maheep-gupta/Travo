@@ -1,4 +1,4 @@
-import type { ReactNode, Ref } from "react";
+import { useId, type ReactNode, type Ref } from "react";
 import { ApiError } from "@mc/api-client/demo";
 import {
   STATUS_LABEL,
@@ -59,10 +59,12 @@ export function PageHeader({ eyebrow, title, children }: { eyebrow?: string; tit
 
 /** `headingRef` makes the heading focusable from script, for when the content the user was on disappears. */
 export function EmptyState({ title, children, icon = <IconInbox />, headingRef }: { title: string; children?: ReactNode; icon?: ReactNode; headingRef?: Ref<HTMLHeadingElement> }) {
+  const headingId = useId();
+  // A labelled group, not a live region: it holds links and buttons, and each page announces changes itself.
   return (
-    <div className="state" role="status">
+    <div className="state" role="group" aria-labelledby={headingId}>
       {icon}
-      <h2 ref={headingRef} tabIndex={headingRef ? -1 : undefined}>
+      <h2 id={headingId} ref={headingRef} tabIndex={headingRef ? -1 : undefined}>
         {title}
       </h2>
       {children}

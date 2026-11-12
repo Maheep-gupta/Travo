@@ -235,7 +235,7 @@ describe("Session page for a session the incomplete list left out (QA M1)", () =
     backend.api = { ...backendReporting({ truncated: false, dropped: 1 }, { omit: (s) => s.id === target.id }), getSession: () => Promise.resolve(null) };
     renderAt(`/sessions/${target.id}`);
     const title = await screen.findByRole("heading", { name: "Session not found" }, T);
-    const state = title.closest("[role=status]") as HTMLElement;
+    const state = title.closest("[role=group]") as HTMLElement;
     expect(state.textContent).toContain("Tavro couldn't find this session in the sessions it loaded");
     expect(state.textContent).not.toMatch(/another account/);
     expect(within(state).getByRole("link", { name: "Back to sessions" })).toBeTruthy();
@@ -247,7 +247,7 @@ describe("Session page for a session the incomplete list left out (QA M1)", () =
     backend.api = { ...backendReporting({ truncated: false, dropped: 0 }, { omit: (s) => s.id === target.id }), getSession };
     renderAt(`/sessions/${target.id}`);
     const title = await screen.findByRole("heading", { name: "Session not found" }, T);
-    expect((title.closest("[role=status]") as HTMLElement).textContent).toMatch(/belongs to another account/);
+    expect((title.closest("[role=group]") as HTMLElement).textContent).toMatch(/belongs to another account/);
     expect(getSession).not.toHaveBeenCalled();
   });
 });

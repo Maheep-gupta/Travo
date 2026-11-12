@@ -6,8 +6,12 @@
 .offline-banner {
   --c: var(--st-offline);
   display: flex; gap: var(--sp-3); align-items: flex-start;
-  width: calc(100% - 2 * var(--sp-4)); max-width: calc(1080px - 2 * var(--sp-4));
-  margin: var(--sp-3) auto 0; padding: 10px var(--sp-4);
+  /* Lines up with the page content (max 1080px, centred), and on landscape phones keeps clear
+     of the notch like the page does (mobile.css) instead of a fixed gutter the notch can cover
+     (M10). Percentages are of the full-width parent. */
+  margin: var(--sp-3) 0 0; padding: 10px var(--sp-4);
+  margin-left: max(var(--sp-4), env(safe-area-inset-left), calc((100% - 1080px) / 2 + var(--sp-4)));
+  margin-right: max(var(--sp-4), env(safe-area-inset-right), calc((100% - 1080px) / 2 + var(--sp-4)));
   background: color-mix(in srgb, var(--c) 12%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--c) 35%, var(--line));
   border-radius: var(--r-md);
@@ -18,7 +22,12 @@
 .offline-banner > svg { width: 18px; height: 18px; flex: none; margin-top: 2px; color: var(--c); }
 .offline-banner > p { flex: 1; min-width: 0; margin: 0; font-size: 0.9rem; color: var(--text-2); overflow-wrap: anywhere; }
 .offline-banner strong { color: var(--text); font-weight: 600; }
-@media (min-width: 720px) { .offline-banner { width: calc(100% - 2 * var(--sp-5)); max-width: calc(1080px - 2 * var(--sp-5)); } }
+@media (min-width: 720px) {
+  .offline-banner {
+    margin-left: max(var(--sp-5), env(safe-area-inset-left), calc((100% - 1080px) / 2 + var(--sp-5)));
+    margin-right: max(var(--sp-5), env(safe-area-inset-right), calc((100% - 1080px) / 2 + var(--sp-5)));
+  }
+}
 
 /* ---------- Settings: information sections ---------- */
 .settings-note { margin-top: var(--sp-3); }

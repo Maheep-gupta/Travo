@@ -7,7 +7,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, type AuthUser, type BackendKind, type ChangeTopic, type SignOutResult, type TavroApi } from "@mc/api-client/demo";
+import { ACCOUNT_CHANGED_MESSAGE, ApiError, type AuthUser, type BackendKind, type ChangeTopic, type ReadOptions, type SignOutResult, type TavroApi } from "@mc/api-client/demo";
 import type { HostRow, NotificationPrefs, PairingTicket, SessionEventRow, SessionMessageRow, SessionRow, SessionStatus } from "@mc/contracts";
 import { MAX_SCHEMA_VERSION } from "@mc/contracts/constants";
 import { AlertStore, alertStorageKey } from "./alert-store.js";
@@ -100,8 +100,10 @@ class FakeApi implements TavroApi {
 
   constructor(readonly kind: BackendKind) {}
 
-  private owner(): AuthUser {
+  private owner(options?: ReadOptions): AuthUser {
     if (!this.user) throw new ApiError("Please sign in.", "unauthorized");
+    // A read pinned to someone else, like the Supabase backend's check of the token's sub.
+    if (options?.asUser !== undefined && options.asUser !== this.user.id) throw new ApiError(ACCOUNT_CHANGED_MESSAGE, "account_changed");
     if (this.failWith) throw this.failWith;
     return this.user;
   }
@@ -141,10 +143,10 @@ class FakeApi implements TavroApi {
     this.authListeners.add(cb);
     return () => this.authListeners.delete(cb);
   }
-  listSessions(): Promise<SessionRow[]> {
+  listSessions(options?: ReadOptions): Promise<SessionRow[]> {
     try {
       // The owner is fixed when the request goes out, as with a real token.
-      const rows = (this.data.get(this.owner().id) ?? []).map((s) => ({ ...s }));
+      const rows = (this.data.get(this.owner(options).id) ?? []).map((s) => ({ ...s }));
       if (this.holdA && this.user === A) return this.holdA.then(() => rows);
       return Promise.resolve(rows);
     } catch (e) {
@@ -160,9 +162,9 @@ class FakeApi implements TavroApi {
   listMessages(): Promise<SessionMessageRow[]> {
     return Promise.resolve([]);
   }
-  listHosts(): Promise<HostRow[]> {
+  listHosts(options?: ReadOptions): Promise<HostRow[]> {
     try {
-      const owner = this.owner();
+      const owner = this.owner(options);
       const now = new Date().toISOString();
       return Promise.resolve([
         { id: hostId(owner), owner_id: owner.id, name: `Laptop ${owner.email}`, platform: "simulated", connector_version: "test", remote_control_allowed: false, last_seen_at: now, provider_error_since: null, paired_at: T0, revoked_at: null, created_at: T0 },
@@ -177,9 +179,9 @@ class FakeApi implements TavroApi {
   revokeHost(): Promise<void> {
     return Promise.reject(new Error("not used"));
   }
-  getNotificationPrefs(): Promise<NotificationPrefs | null> {
+  getNotificationPrefs(options?: ReadOptions): Promise<NotificationPrefs | null> {
     try {
-      const owner = this.owner();
+      const owner = this.owner(options);
       this.prefsCalls.set(owner.id, (this.prefsCalls.get(owner.id) ?? 0) + 1);
       return Promise.resolve(null);
     } catch (e) {
@@ -474,6 +476,56 @@ describe("another tab", () => {
     await signedInAs(A_TITLE);
     expect(storedAlerts(A)).toHaveLength(1);
     expect(screen.getAllByRole("link", { name: "Alerts, 1 unread" }).length).toBeGreaterThan(0);
+  });
+
+  // Security re-check L3: reads are pinned to the signed-in user, so B's
+  // answers are refused under A's keys; the tab then follows the stored
+  // sign-in instead of waiting on an auth event that may never come.
+  it("a sign-in to B there that this tab hasn't heard of: A's reads refuse B's answers, and the tab moves to B", async () => {
+    seedAlert(A);
+    renderApp();
+    await signedInAs(A_TITLE);
+    const getUserCalls = api.getUserCalls;
+
+    // Shared storage now holds B's sign-in; no auth event reaches this tab.
+    api.user = B;
+    await act(() => queryClient.invalidateQueries());
+    await signedInAs(B_TITLE);
+    expect(pageText()).not.toContain(A_TITLE);
+    expect(api.getUserCalls).toBeGreaterThan(getUserCalls);
+    expect(cachedKeys().some((k) => k[2] === A.id)).toBe(false);
+    // Not taken for an expired sign-in: nothing was signed out, and no notice.
+    expect(api.signOutCalls).toEqual([]);
+    expect(pageText()).not.toContain(EXPIRED_NOTICE);
+    // A different person is now the last user here (M2), and B's first load is a baseline.
+    expect(storedAlerts(A)).toEqual([]);
+    expect(storedAlerts(B)).toEqual([]);
+  });
+
+  it("when the stored sign-in can't be read then (offline), keeps A's own data and moves to B once back online", async () => {
+    renderApp();
+    await signedInAs(A_TITLE);
+
+    // B's sign-in is stored, and reading it fails: no network.
+    api.user = B;
+    const offline = Promise.reject(new Error("Failed to fetch"));
+    offline.catch(() => undefined);
+    api.slowGetUser = offline;
+    const getUserCalls = api.getUserCalls;
+    await act(() => queryClient.invalidateQueries());
+    await waitFor(() => expect(api.getUserCalls).toBeGreaterThan(getUserCalls));
+    // Still A's tab with A's own last data (shown as not refreshing): nothing of B's, nothing signed out.
+    expect(pageText()).toContain(A_TITLE);
+    expect(pageText()).not.toContain(B_TITLE);
+    expect(api.signOutCalls).toEqual([]);
+
+    // Back online: the stored sign-in is read again and the tab follows it.
+    api.slowGetUser = null;
+    await act(async () => {
+      window.dispatchEvent(new Event("online"));
+    });
+    await signedInAs(B_TITLE);
+    expect(cachedKeys().some((k) => k[2] === A.id)).toBe(false);
   });
 });
 

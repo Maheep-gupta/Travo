@@ -70,21 +70,22 @@ describe("Claude Code provider through the connector", () => {
   });
 
   it.each([
-    ["CLI missing", async () => Promise.reject(new ClaudeCommandError("not_found")), "not found"],
-    ["timeout", async () => Promise.reject(new ClaudeCommandError("timeout")), "timed out"],
-    ["auth required", async () => ({ stdout: "", exitCode: 1, authRequired: true }), "not signed in"],
-    ["interrupted", async () => ({ stdout: fixture("truncated.txt"), exitCode: -1, interrupted: true }), "interrupted"],
-    ["partial JSON", async () => ({ stdout: fixture("truncated.txt"), exitCode: 0 }), "not valid JSON"],
-    ["renamed format", async () => ({ stdout: fixture("renamed-keys.txt"), exitCode: 0 }), "unrecognised format"],
-    ["empty output", async () => ({ stdout: "", exitCode: 0 }), "no output"],
-    ["non-zero exit", async () => ({ stdout: fixture("non-json.txt"), exitCode: 2 }), "exited with code 2"],
+    ["CLI missing", async () => Promise.reject(new ClaudeCommandError("not_found")), "not found", "cli_missing"],
+    ["timeout", async () => Promise.reject(new ClaudeCommandError("timeout")), "timed out", "timeout"],
+    ["auth required", async () => ({ stdout: "", exitCode: 1, authRequired: true }), "not signed in", "auth_required"],
+    ["interrupted", async () => ({ stdout: fixture("truncated.txt"), exitCode: -1, interrupted: true }), "interrupted", "interrupted"],
+    ["partial JSON", async () => ({ stdout: fixture("truncated.txt"), exitCode: 0 }), "not valid JSON", "invalid_output"],
+    ["renamed format", async () => ({ stdout: fixture("renamed-keys.txt"), exitCode: 0 }), "unrecognised format", "invalid_output"],
+    ["empty output", async () => ({ stdout: "", exitCode: 0 }), "no output", "invalid_output"],
+    ["non-zero exit", async () => ({ stdout: fixture("non-json.txt"), exitCode: 2 }), "exited with code 2", "failed"],
     // TWO is still there, but its entry can't be identified: missing data, not negative evidence.
     [
       "a known session's entry without a usable id",
       async () => ({ stdout: JSON.stringify([{ sessionId: ONE, status: "busy" }, { sessionId: 42, status: "idle", cwd: "/home/dev/projects/beta" }]), exitCode: 0 }),
       "without a usable session id",
+      "invalid_output",
     ],
-  ] as const)("a failed read (%s) reports the source unhealthy, says which, and ends nothing", async (_, run, said) => {
+  ] as const)("a failed read (%s) reports the source unhealthy, says which, and ends nothing", async (_, run, said, category) => {
     const { transport, connector, logs, set, status } = setup();
     await connector.runOnce();
     set(run as () => Promise<CommandResult>);
@@ -92,6 +93,9 @@ describe("Claude Code provider through the connector", () => {
     await connector.runOnce();
     expect(connector.connectionState).toBe("provider_error");
     expect(transport.heartbeats.map((h) => h.provider_ok)).toEqual([true, false]);
+    // Only the category reaches the backend (schema v4), never the message.
+    expect(transport.heartbeats.map((h) => h.provider_error_kind)).toEqual([null, category]);
+    for (const h of transport.heartbeats) expect(Object.keys(h).sort()).toEqual(["connector_version", "platform", "provider_error_kind", "provider_ok", "remote_control_allowed"]);
     expect(logs.find((l) => l.startsWith("provider error: claude-code:"))).toContain(said);
     expect([status(ONE), status(TWO)]).toEqual(["running", "waiting_for_input"]);
     expect(transport.events.filter((e) => e.type === "session_ended")).toHaveLength(0);
@@ -116,6 +120,7 @@ describe("Claude Code provider through the connector", () => {
     expect(connector.connectionState).toBe("provider_error");
     expect(logs.find((l) => l.startsWith("provider error: claude-code:"))).toContain("newer than the supported range");
     expect(transport.heartbeats.at(-1)?.provider_ok).toBe(false);
+    expect(transport.heartbeats.at(-1)?.provider_error_kind).toBe("incompatible_version");
     expect([status(ONE), status(TWO)]).toEqual(["running", "waiting_for_input"]);
 
     setVersion(async () => VERSION_OK);

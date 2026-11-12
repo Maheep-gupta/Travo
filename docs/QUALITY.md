@@ -6,11 +6,11 @@
 |---|---|---|
 | Type check (strict, all workspaces and DB tests) | `npm run typecheck` | Available |
 | Lint, including the platform-neutrality rules for `@mc/domain` | `npm run lint` | Available |
-| Unit, component and SQL-level tests (vitest "unit" in Node, "dom" in jsdom, "sql" in PGlite) | `npm test` | Available. 930 tests as of 2026-11-03 (sixth cycle), 71 of them SQL-level, including axe accessibility checks (jsdom; no colour contrast). Component tests use jsdom, not a real browser, so layout, CSS and real notification APIs aren't covered. |
+| Unit, component and SQL-level tests (vitest "unit" in Node, "dom" in jsdom, "sql" in PGlite) | `npm test` | Available. 1349 tests as of 2026-11-12 (seventh cycle), 79 of them SQL-level, including axe accessibility checks (jsdom; no colour contrast). Component tests use jsdom, not a real browser, so layout, CSS and real notification APIs aren't covered. |
 | Production web build | `npm run build -w @mc/web` | Available |
 | Browser checks (65) | `npm run test:e2e` | **Unavailable.** Endpoint protection kills headless Chrome and Edge. |
 | RLS and isolation tests | `npm run test:db` | **Unavailable.** The Docker engine doesn't respond. |
-| SQL-level migration tests (PGlite) — **not a substitute for `test:db`** | `npm run test:sql` | Available, Docker-free (~6 s). Runs the real migrations, unmodified, on PGlite (Postgres 18 in WASM) behind a minimal Supabase shim (`supabase/sql-tests/supabase-shim.sql`, which lists its differences from Supabase). Covers grants, RLS, triggers, RPCs and the v1→v3 upgrade path, with SQL shaped like PostgREST's. Its first run found that the v1 trigger `set_owner_from_host` made every session insert fail with 42703. That's fixed by migration `20261104000001` (D-021), and all 50 pass. **Part of `npm test` and `check` since 2026-11-03.** |
+| SQL-level migration tests (PGlite) — **not a substitute for `test:db`** | `npm run test:sql` | Available, Docker-free (~6 s). Runs the real migrations, unmodified, on PGlite (Postgres 18 in WASM) behind a minimal Supabase shim (`supabase/sql-tests/supabase-shim.sql`, which lists its differences from Supabase). Covers grants, RLS, triggers, RPCs and the v1→v4 upgrade path, with SQL shaped like PostgREST's. Its first run found that the v1 trigger `set_owner_from_host` made every session insert fail with 42703. That's fixed by migration `20261104000001` (D-021), and all pass. **Part of `npm test` and `check` since 2026-11-03.** |
 
 `npm run check` runs the first three. A change to the web app also needs the build to pass.
 

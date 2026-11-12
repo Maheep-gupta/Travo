@@ -1,14 +1,14 @@
 import { useEffect, useId, useState, useSyncExternalStore, type CSSProperties } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { DEFAULT_NOTIFICATION_PREFS } from "@mc/contracts/constants";
 import type { NotificationPrefs } from "@mc/contracts";
 import { useApi } from "../api-context.js";
 import { ErrorState, PageHeader, Spinner } from "../components.js";
-import { userKey, useUserId } from "../hooks.js";
+import { usePrefs, userKey, useUserId } from "../hooks.js";
 import { IconCheck } from "../icons.js";
 import { webStorage } from "../platform.js";
-import { AccountCard, ApplicationCard, IntegrationsCard, PrivacyCard } from "../settings-sections.js";
+import { AccountCard, ApplicationCard, DiagnosticsCard, IntegrationsCard, PrivacyCard } from "../settings-sections.js";
 import { SystemNotificationsCard } from "../system-notifications-card.js";
 import {
   THEME_PREFERENCES,
@@ -36,8 +36,9 @@ const LABELS: Record<keyof NotificationPrefs, { title: string; hint: string }> =
 export function SettingsPage() {
   const api = useApi();
   const queryClient = useQueryClient();
-  const prefsKey = userKey(api, useUserId(), "prefs");
-  const prefsQuery = useQuery({ queryKey: prefsKey, queryFn: () => api.getNotificationPrefs() });
+  const userId = useUserId();
+  const prefsKey = userKey(api, userId, "prefs");
+  const prefsQuery = usePrefs();
 
   // `draft` holds unsaved edits; null means "showing what is saved".
   const saved = prefsQuery.data ?? DEFAULT_NOTIFICATION_PREFS;
@@ -49,7 +50,8 @@ export function SettingsPage() {
   const dirty = draft !== null && !prefsEqual(draft, saved);
 
   const save = useMutation({
-    mutationFn: (p: NotificationPrefs) => api.saveNotificationPrefs(p),
+    // Saved as this user or not at all, so the cache below is written under the account that was saved (L1).
+    mutationFn: (p: NotificationPrefs) => api.saveNotificationPrefs(p, { asUser: userId }),
     onSuccess: (_data, p) => {
       queryClient.setQueryData(prefsKey, p);
       setDraft(null);
@@ -65,7 +67,9 @@ export function SettingsPage() {
 
   return (
     <main className="page medium">
-      <PageHeader eyebrow="Settings" title="Preferences & connection" />
+      <PageHeader eyebrow="Settings" title="Preferences & connection">
+        Setting up a laptop? The <Link to="/setup">setup checklist</Link> checks each step against what Tavro can see.
+      </PageHeader>
 
       <div className="settings-grid">
         <AccountCard />
@@ -140,6 +144,8 @@ export function SettingsPage() {
         <IntegrationsCard />
 
         <ApplicationCard />
+
+        <DiagnosticsCard />
       </div>
     </main>
   );

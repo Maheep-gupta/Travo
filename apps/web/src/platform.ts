@@ -4,7 +4,7 @@
 //
 // Backends are loaded on demand: demo mode never downloads supabase-js or
 // zod, and the Supabase backend is only fetched once a project is connected.
-import { MemoryStorage, type KeyValueStorage, type TavroApi } from "@mc/api-client/demo";
+import { MemoryStorage, removeOtherAuthSessions, type KeyValueStorage, type TavroApi } from "@mc/api-client/demo";
 
 const BACKEND_KEY = "mc.backend";
 
@@ -18,6 +18,8 @@ export const webStorage: KeyValueStorage = (() => {
       getItem: (k) => window.localStorage.getItem(k),
       setItem: (k, v) => window.localStorage.setItem(k, v),
       removeItem: (k) => window.localStorage.removeItem(k),
+      // Lets a new backend find other projects' stored sign-ins (removeOtherAuthSessions).
+      keys: () => Array.from({ length: window.localStorage.length }, (_, i) => window.localStorage.key(i)).filter((k): k is string => k !== null),
     };
   } catch {
     return new MemoryStorage();
@@ -62,6 +64,8 @@ export function saveBackendChoice(choice: BackendChoice | null): void {
 
 export async function createApi(choice: BackendChoice): Promise<TavroApi> {
   if (choice.kind === "demo") {
+    // Demo data needs no sign-in: none left from a project stays stored (L2).
+    await removeOtherAuthSessions(webStorage, null);
     const { createDemoApi } = await import("@mc/api-client/demo");
     return createDemoApi();
   }

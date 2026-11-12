@@ -1,4 +1,4 @@
-import { useMemo, useRef, type MouseEvent, type ReactNode } from "react";
+import { useId, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import type { Capability, SessionEventRow, SessionRow, SessionStatus } from "@mc/contracts";
@@ -7,6 +7,7 @@ import {
   EMPTY_DASHBOARD_FILTER,
   HEARTBEAT_INTERVAL_MS,
   PROVIDERS,
+  STATUS_HISTORY_LIMIT,
   STATUS_LABEL,
   buildSessionViews,
   dashboardReturnPath,
@@ -14,7 +15,10 @@ import {
   pageAvailability,
   relativeTime,
   sessionAlerts,
+  sourceFailureText,
   sourceState,
+  timelineCountLabel,
+  timelineWindow,
   untrustedHostReason,
   type SessionView,
 } from "@mc/domain";
@@ -32,7 +36,7 @@ import {
   StatusBadge,
 } from "../components.js";
 import { useHosts, useNow, useSessionViews, useStatusClock, userKey, useUserId, type SessionViewsResult } from "../hooks.js";
-import { IconArrowLeft, IconBell, IconCheck, IconClose, IconFolder, IconHost, IconLock, IconSessions } from "../icons.js";
+import { IconArrowLeft, IconBell, IconCheck, IconChevron, IconClose, IconFolder, IconHost, IconLock, IconSessions } from "../icons.js";
 import { dashboardFilterParams } from "../view-model.js";
 import { FreshnessNote } from "./DashboardPage.js";
 
@@ -77,14 +81,14 @@ export function SessionPage() {
   // Also fetched when the session list failed: the history is still worth showing on its own.
   const events = useQuery({
     queryKey: userKey(api, userId, "sessions", "events", id),
-    queryFn: () => api.listEvents(id, 100),
+    queryFn: () => api.listEvents(id, STATUS_HISTORY_LIMIT, { asUser: userId }),
     enabled: Boolean(session) || sessions.sessions === "failed",
   });
   // Message content stays behind the session's own capability, so it never loads without the session.
   const canReadMessages = session ? hasCapability(session.capabilities, "read_messages") : false;
   const messages = useQuery({
     queryKey: userKey(api, userId, "sessions", "messages", id),
-    queryFn: () => api.listMessages(id, 30),
+    queryFn: () => api.listMessages(id, 30, { asUser: userId }),
     enabled: canReadMessages,
   });
   const availability = pageAvailability({
@@ -126,7 +130,7 @@ export function SessionPage() {
           {/* The id isn't confirmed: the database answers an id that isn't yours with an empty history, not an error. */}
           <p>Its current state is unknown until the session list loads. If this session exists, its recorded history appears below.</p>
         </MissingDataNotice>
-        <StatusHistory events={events} now={now} unconfirmed />
+        <StatusHistory key={id} events={events} now={now} unconfirmed />
       </main>
     );
   }
@@ -215,10 +219,7 @@ export function SessionPage() {
           <FreshnessNote freshness={session.freshness} now={now} withReason />
         </div>
         {session.displayStatus === "source_unavailable" ? (
-          <p className="reason">
-            <strong>{session.hostName} is online but can't read its sessions right now,</strong> so this state may be out of date. Last reported:{" "}
-            {STATUS_LABEL[session.status]}.
-          </p>
+          <SourceUnavailableReason session={session} />
         ) : session.displayStatus === "disconnected" ? (
           <p className="reason">
             <strong>{untrustedHostReason(session.hostConnectivity, session.hostName)},</strong> so this session's current state is unknown. Last reported:{" "}
@@ -247,7 +248,7 @@ export function SessionPage() {
 
       <div className="detail-grid">
         <div className="detail-main">
-          <StatusHistory events={events} now={now} />
+          <StatusHistory key={id} events={events} now={now} />
 
           <section className="card" aria-labelledby="h-alerts">
             <div className="card-title">
@@ -478,6 +479,27 @@ function BackLink({ className = "back", children }: { className?: string; childr
 }
 
 /**
+ * Why a session behind a failing source may be out of date: the host page's
+ * wording (sourceFailureText), what to do only while the host is online, and
+ * a link to the host. The host row comes from the shared host list query.
+ */
+function SourceUnavailableReason({ session }: { session: SessionView }) {
+  const hosts = useHosts();
+  const failure = sourceFailureText(hosts.data?.find((h) => h.id === session.host_id)?.provider_error_kind);
+  return (
+    <>
+      <p className="reason">
+        <strong>{failure.summary},</strong> so this state may be out of date. Last reported: {STATUS_LABEL[session.status]}.
+      </p>
+      <p className="reason">
+        {failure.title}.{session.hostConnectivity === "online" && ` ${failure.guidance}`}{" "}
+        <Link to={`/hosts/${session.host_id}`}>View {session.hostName}</Link>
+      </p>
+    </>
+  );
+}
+
+/**
  * A session the loaded list doesn't include, looked up on its own while that
  * list is incomplete (cut at the limit, or rows left out): only a complete
  * list settles that a session isn't there. Built like the list's sessions, so
@@ -498,7 +520,7 @@ function useUnlistedSession(id: string, views: SessionViewsResult, listed: boole
   // Not a status list (see isStatusQuery); polled like one while it stands in for the list.
   const query = useQuery({
     queryKey: userKey(api, userId, "sessions", "detail", id),
-    queryFn: () => api.getSession(id),
+    queryFn: () => api.getSession(id, { asUser: userId }),
     enabled: lookingUp,
     refetchInterval: lookingUp ? HEARTBEAT_INTERVAL_MS : false,
   });
@@ -515,12 +537,17 @@ function useUnlistedSession(id: string, views: SessionViewsResult, listed: boole
 
 /** The session's recorded status changes; shown on its own when the session list fails. */
 /** `unconfirmed`: the session itself couldn't be loaded, so an empty history mustn't suggest it exists. */
+/** A long history shows its newest events and folds the older ones behind a button (mobile review M2). */
 function StatusHistory({ events, now, unconfirmed = false }: { events: UseQueryResult<SessionEventRow[]>; now: Date; unconfirmed?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const listId = useId();
+  const loaded = events.data ?? [];
+  const fold = timelineWindow(loaded, expanded);
   return (
     <section className="card" aria-labelledby="h-history">
       <div className="card-title">
         <h2 id="h-history">Status history</h2>
-        {events.data && <span className="eyebrow">{events.data.length} events</span>}
+        {events.data && <span className="eyebrow">{timelineCountLabel(events.data.length)}</span>}
       </div>
       {/* A failed refresh keeps the history that loaded. */}
       {events.data !== undefined && events.isError && (
@@ -533,32 +560,47 @@ function StatusHistory({ events, now, unconfirmed = false }: { events: UseQueryR
           <Spinner />
         )
       ) : events.data.length ? (
-        <ol className="timeline">
-          {events.data.map((e) => {
-            const st = e.status ?? "unknown";
-            return (
-              <li key={e.id} className={`st-${st}`}>
-                <span className={`tl-dot ${HOLLOW.has(st) || e.type === "session_ended" ? "hollow" : ""}`} aria-hidden="true" />
-                <div className="tl-body">
-                  <div className="tl-head">
-                    <b>
-                      {e.type === "session_discovered"
-                        ? `Discovered · ${STATUS_LABEL[st]}`
-                        : e.type === "session_ended"
-                          ? "Session ended"
-                          : STATUS_LABEL[st]}
-                    </b>
-                    {e.is_demo && <DemoTag />}
-                    <time className="tl-time" dateTime={e.occurred_at} title={formatTime(e.occurred_at)}>
-                      {relativeTime(e.occurred_at, now)}
-                    </time>
+        <>
+          <ol className="timeline" id={listId}>
+            {fold.shown.map((e) => {
+              const st = e.status ?? "unknown";
+              return (
+                <li key={e.id} className={`st-${st}`}>
+                  <span className={`tl-dot ${HOLLOW.has(st) || e.type === "session_ended" ? "hollow" : ""}`} aria-hidden="true" />
+                  <div className="tl-body">
+                    <div className="tl-head">
+                      <b>
+                        {e.type === "session_discovered"
+                          ? `Discovered · ${STATUS_LABEL[st]}`
+                          : e.type === "session_ended"
+                            ? "Session ended"
+                            : STATUS_LABEL[st]}
+                      </b>
+                      {e.is_demo && <DemoTag />}
+                      <time className="tl-time" dateTime={e.occurred_at} title={formatTime(e.occurred_at)}>
+                        {relativeTime(e.occurred_at, now)}
+                      </time>
+                    </div>
+                    {e.summary && <p>{e.summary}</p>}
                   </div>
-                  {e.summary && <p>{e.summary}</p>}
-                </div>
-              </li>
-            );
-          })}
-        </ol>
+                </li>
+              );
+            })}
+          </ol>
+          {/* Stays below the list in both states, so focus doesn't jump; aria-expanded says what changed. */}
+          {fold.foldable && (
+            <button
+              type="button"
+              className="btn ghost small timeline-more"
+              aria-expanded={expanded}
+              aria-controls={listId}
+              onClick={() => setExpanded(!expanded)}
+            >
+              <IconChevron className={expanded ? "open" : undefined} />
+              {expanded ? "Show fewer" : `Show ${fold.hidden} older ${fold.hidden === 1 ? "event" : "events"}`}
+            </button>
+          )}
+        </>
       ) : (
         <p className="muted">{unconfirmed ? "No recorded history to show." : "No status changes recorded yet."}</p>
       )}

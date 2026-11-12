@@ -10,10 +10,10 @@ import {
 import { SESSION_LIST_LIMIT } from "@mc/contracts/constants";
 import { POSTGREST_JWT_ERROR_CODES, isKeyRejection } from "@mc/domain";
 import type { z } from "zod";
-import { ApiError, type AuthUser, type ChangeTopic, type LiveUpdatesStatus, type TavroApi } from "./api.js";
+import { ACCOUNT_CHANGED_MESSAGE, ApiError, type AuthUser, type ChangeTopic, type LiveUpdatesStatus, type ReadOptions, type TavroApi } from "./api.js";
 import { ConnectionConfig } from "./connection.js";
 import { createSessionListStore } from "./session-list-store.js";
-import type { KeyValueStorage } from "./storage.js";
+import { AUTH_STORAGE_PREFIX, removeKeys, removeOtherAuthSessions, type KeyValueStorage } from "./storage.js";
 
 /** Shown whenever the database stops accepting the signed-in session. */
 export const SESSION_EXPIRED_MESSAGE = "Your sign-in has expired. Please sign in again.";
@@ -127,7 +127,7 @@ export function parseEachRow<T extends z.ZodTypeAny>(schema: T, rows: unknown): 
  */
 export function authStorageKey(url: string): string {
   const u = new URL(url);
-  return `tavro.auth:${u.origin}${u.pathname.replace(/\/+$/, "")}`;
+  return `${AUTH_STORAGE_PREFIX}${u.origin}${u.pathname.replace(/\/+$/, "")}`;
 }
 
 /**
@@ -137,15 +137,33 @@ export function authStorageKey(url: string): string {
  */
 export const LEGACY_AUTH_STORAGE_KEY = "tavro.auth";
 
-/** Removes a stored session and auth-js's companion entries, locally only. Never throws. */
-function removeStoredSession(storage: KeyValueStorage, key: string): void {
-  for (const k of [key, `${key}-user`, `${key}-code-verifier`]) {
-    try {
-      void Promise.resolve(storage.removeItem(k)).catch(() => undefined);
-    } catch {
-      // Blocked storage: nothing was persisted.
-    }
+/**
+ * Removes a stored session and auth-js's companion entries, locally only.
+ * Resolves once an async store (Expo) has removed them; never rejects.
+ */
+function removeStoredSession(storage: KeyValueStorage, key: string): Promise<void> {
+  return removeKeys(storage, [key, `${key}-user`, `${key}-code-verifier`]);
+}
+
+/**
+ * The `sub` claim of an access token, or null if it can't be read. Not
+ * verified (the database does that): only names whose token was sent.
+ */
+export function jwtSubject(token: string): string | null {
+  const part = token.split(".")[1];
+  if (!part) return null;
+  try {
+    const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    const sub = (JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, "="))) as { sub?: unknown }).sub;
+    return typeof sub === "string" && sub !== "" ? sub : null;
+  } catch {
+    return null;
   }
+}
+
+/** Sends a request with exactly this token: supabase-js only adds its own when none is set. */
+function withToken<B extends { setHeader(name: string, value: string): B }>(query: B, token: string | null): B {
+  return token === null ? query : query.setHeader("Authorization", `Bearer ${token}`);
 }
 
 /**
@@ -188,7 +206,9 @@ export function createSupabaseApi(config: ConnectionConfig, storage: KeyValueSto
   const { url, publishableKey } = ConnectionConfig.parse(config);
   const storageKey = authStorageKey(url);
   // Before the client exists, so no client can ever read it.
-  removeStoredSession(storage, LEGACY_AUTH_STORAGE_KEY);
+  void removeStoredSession(storage, LEGACY_AUTH_STORAGE_KEY);
+  // Sign-ins to other projects: this device has moved on from them (L2).
+  void removeOtherAuthSessions(storage, storageKey);
   const client: SupabaseClient = createClient(url, publishableKey, {
     // Explicit per-project key, so a failed local sign-out can still drop the stored session.
     auth: { storage, storageKey, persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
@@ -211,11 +231,36 @@ export function createSupabaseApi(config: ConnectionConfig, storage: KeyValueSto
    * auto-refresh stopped and this tab's listeners told here.
    */
   async function dropLocalSession(): Promise<void> {
-    removeStoredSession(storage, storageKey);
+    await removeStoredSession(storage, storageKey);
     const again = await client.auth.signOut({ scope: "local" }).catch((e: unknown) => ({ error: e }));
     if (!again.error) return;
     await client.auth.stopAutoRefresh();
     for (const cb of signedOutHere) cb(null);
+  }
+
+  /**
+   * The token a request pinned to `options.asUser` sends, or null when it
+   * isn't pinned (supabase-js then sends whatever is stored). Throws, sending
+   * nothing, when the stored sign-in is gone or belongs to another account,
+   * or when the token's account can't be read from it.
+   */
+  async function pinnedToken(options: ReadOptions | undefined): Promise<string | null> {
+    const asUser = options?.asUser;
+    if (asUser === undefined) return null;
+    // auth-js refreshes an expiring session here, as it would for the request itself.
+    const { data, error } = await client.auth.getSession().catch((e: unknown) => ({ data: { session: null }, error: e as { name?: string; status?: number } }));
+    const session = data.session;
+    if (!session) {
+      // A refresh that failed on the network or a 5xx is an outage, not an expired sign-in.
+      const mapped = error ? toSignInError(error) : null;
+      if (mapped && mapped.code !== "unauthorized") throw mapped;
+      throw new ApiError(SESSION_EXPIRED_MESSAGE, "unauthorized");
+    }
+    // The account the database will answer for is the token's own. A token
+    // whose sub can't be read fails closed: the user record stored beside it
+    // says nothing about whom the database would answer as (I1).
+    if (jwtSubject(session.access_token) !== asUser) throw new ApiError(ACCOUNT_CHANGED_MESSAGE, "account_changed");
+    return session.access_token;
   }
 
   // Live-updates status of the latest subscription (`liveChannel`), for Settings. Only the
@@ -296,18 +341,22 @@ export function createSupabaseApi(config: ConnectionConfig, storage: KeyValueSto
       };
     },
 
-    async listSessions() {
+    async listSessions(options) {
+      const auth = await pinnedToken(options);
       const token = sessionList.begin();
       // One row past the limit, only to learn whether more exist. Most recent
       // activity first, so the newest are kept: no activity yet sorts last
       // (Postgres puts NULLs first in DESC), and id breaks ties at the
       // cut-off, so the same sessions are kept on every poll.
-      const { data, error, status } = await client
-        .from("sessions")
-        .select("*")
-        .order("last_activity_at", { ascending: false, nullsFirst: false })
-        .order("id")
-        .limit(SESSION_LIST_LIMIT + 1);
+      const { data, error, status } = await withToken(
+        client
+          .from("sessions")
+          .select("*")
+          .order("last_activity_at", { ascending: false, nullsFirst: false })
+          .order("id")
+          .limit(SESSION_LIST_LIMIT + 1),
+        auth,
+      );
       if (error) throw toApiError(error, status);
       // Parsed before the cut, so valid rows past the limit fill the places of
       // unreadable ones. More rows than the limit came back: more may exist.
@@ -317,8 +366,9 @@ export function createSupabaseApi(config: ConnectionConfig, storage: KeyValueSto
       sessionList.report(token, { truncated, dropped });
       return rows.slice(0, SESSION_LIST_LIMIT);
     },
-    async getSession(id) {
-      const { data, error, status } = await client.from("sessions").select("*").eq("id", id).maybeSingle();
+    async getSession(id, options) {
+      const auth = await pinnedToken(options);
+      const { data, error, status } = await withToken(client.from("sessions").select("*").eq("id", id).maybeSingle(), auth);
       if (error) throw toApiError(error, status);
       if (!data) return null;
       // A malformed row (one the list drops) gets a message safe to show; zod's issues quote values.
@@ -326,61 +376,78 @@ export function createSupabaseApi(config: ConnectionConfig, storage: KeyValueSto
       if (!parsed.success) throw new ApiError(SESSION_UNREADABLE_MESSAGE, "invalid");
       return parsed.data;
     },
-    async listEvents(sessionId, limit = 100) {
-      const { data, error, status } = await client
+    async listEvents(sessionId, limit = 100, options) {
+      const auth = await pinnedToken(options);
+      const query = client
         .from("session_events")
         .select("*")
         .eq("session_id", sessionId)
         .order("occurred_at", { ascending: false })
         .limit(limit);
+      const { data, error, status } = await withToken(query, auth);
       if (error) throw toApiError(error, status);
       return parseRows(SessionEventRow, data);
     },
-    async listMessages(sessionId, limit = 50) {
-      const { data, error, status } = await client
+    async listMessages(sessionId, limit = 50, options) {
+      const auth = await pinnedToken(options);
+      const query = client
         .from("session_messages")
         .select("id, session_id, external_uuid, role, text, occurred_at")
         .eq("session_id", sessionId)
         .order("occurred_at", { ascending: false })
         .limit(limit);
+      const { data, error, status } = await withToken(query, auth);
       if (error) throw toApiError(error, status);
       return parseRows(SessionMessageRow, data).reverse();
     },
 
-    async listHosts() {
-      const { data, error, status } = await client
+    async listHosts(options) {
+      const auth = await pinnedToken(options);
+      const query = client
         .from("hosts")
-        .select("id, owner_id, name, platform, connector_version, remote_control_allowed, last_seen_at, provider_error_since, paired_at, revoked_at, created_at")
+        .select("id, owner_id, name, platform, connector_version, remote_control_allowed, last_seen_at, provider_error_since, provider_error_kind, paired_at, revoked_at, created_at")
         .order("created_at");
+      const { data, error, status } = await withToken(query, auth);
       if (error) throw toApiError(error, status);
       return parseRows(HostRow, data);
     },
-    async createHostPairing(name) {
-      const { data, error, status } = await client.rpc("create_host_pairing", { p_name: name });
+    async createHostPairing(name, options) {
+      // The host is created for whoever's token goes out, and the laptop that
+      // redeems the code then syncs to that account: never another tab's (L1).
+      const auth = await pinnedToken(options);
+      const { data, error, status } = await withToken(client.rpc("create_host_pairing", { p_name: name }), auth);
       if (error) throw toApiError(error, status);
       const row = (data as unknown[] | null)?.[0];
       return PairingTicket.parse(row);
     },
-    async revokeHost(hostId) {
-      const { data, error, status } = await client.from("hosts").update({ revoked_at: new Date().toISOString() }).eq("id", hostId).select("id");
+    async revokeHost(hostId, options) {
+      const auth = await pinnedToken(options);
+      const query = client.from("hosts").update({ revoked_at: new Date().toISOString() }).eq("id", hostId).select("id");
+      const { data, error, status } = await withToken(query, auth);
       if (error) throw toApiError(error, status);
       if (!data?.length) throw new ApiError("Host not found.", "not_found");
     },
 
-    async getNotificationPrefs() {
-      const { data, error, status } = await client
+    async getNotificationPrefs(options) {
+      const auth = await pinnedToken(options);
+      // A missing row means "never saved" (defaults), so whose token asked matters here too.
+      const query = client
         .from("notification_prefs")
         .select("on_waiting_for_input, on_approval_required, on_completed, on_failed, on_host_disconnected, on_host_reconnected")
         .maybeSingle();
+      const { data, error, status } = await withToken(query, auth);
       if (error) throw toApiError(error, status);
       return data ? NotificationPrefs.parse(data) : null;
     },
-    async saveNotificationPrefs(prefs) {
-      const user = toUser((await client.auth.getSession()).data.session?.user);
-      if (!user) throw new ApiError(SESSION_EXPIRED_MESSAGE, "unauthorized");
-      const { error, status } = await client
+    async saveNotificationPrefs(prefs, options) {
+      const auth = await pinnedToken(options);
+      // Pinned: the checked token's account; otherwise whoever is stored.
+      const ownerId = auth !== null ? options?.asUser : toUser((await client.auth.getSession()).data.session?.user)?.id;
+      if (!ownerId) throw new ApiError(SESSION_EXPIRED_MESSAGE, "unauthorized");
+      const query = client
         .from("notification_prefs")
-        .upsert({ owner_id: user.id, ...NotificationPrefs.parse(prefs), updated_at: new Date().toISOString() }, { onConflict: "owner_id" });
+        .upsert({ owner_id: ownerId, ...NotificationPrefs.parse(prefs), updated_at: new Date().toISOString() }, { onConflict: "owner_id" });
+      const { error, status } = await withToken(query, auth);
       if (error) throw toApiError(error, status);
     },
 

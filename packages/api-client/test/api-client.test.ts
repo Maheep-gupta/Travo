@@ -58,6 +58,7 @@ describe("demo api", () => {
     t += 70_000; // outage began at +60s; this sync is the first to see it
     const started = (await laptop())?.provider_error_since;
     expect(started).toBe(new Date(t).toISOString());
+    expect((await laptop())?.provider_error_kind).toBe("timeout"); // schema v4: the category comes with it
     const frozen = (await api.listSessions()).map((s) => s.updated_at);
     t += 20_000;
     const during = await laptop();
@@ -65,7 +66,7 @@ describe("demo api", () => {
     expect(during?.provider_error_since).toBe(started); // ongoing failure keeps its start
     expect((await api.listSessions()).map((s) => s.updated_at)).toEqual(frozen);
     t += 40_000; // outage over
-    expect((await laptop())?.provider_error_since).toBeNull();
+    expect(await laptop()).toMatchObject({ provider_error_since: null, provider_error_kind: null });
   });
 
   it("never lets an older observation overwrite a newer one (schema v3 rule)", async () => {

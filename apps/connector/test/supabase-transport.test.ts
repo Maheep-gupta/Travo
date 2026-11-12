@@ -10,7 +10,7 @@ import type { Provider } from "../src/types.js";
 
 const URL_BASE = "https://example.supabase.co";
 const CREDS = { host_id: "11111111-1111-4111-8111-111111111111", email: "host-abc@hosts.invalid", password: "p".repeat(40) };
-const HEARTBEAT = { platform: "test", connector_version: "t", remote_control_allowed: false, provider_ok: true };
+const HEARTBEAT = { platform: "test", connector_version: "t", remote_control_allowed: false, provider_ok: true, provider_error_kind: null };
 
 type Route = "token" | "heartbeat" | "sessions" | "messages" | "app_meta";
 type Reply = Response | "network";
@@ -29,7 +29,8 @@ const SESSION = {
 /** A fake backend: each route answers from its queue (the last reply repeats). */
 function backend(replies: Partial<Record<Route, Reply[]>>) {
   const calls: Route[] = [];
-  const fetchImpl = (async (input: string | URL | Request) => {
+  const bodies: { route: Route; body: unknown }[] = [];
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const route: Route | null = url.includes("/auth/v1/token")
       ? "token"
@@ -45,12 +46,13 @@ function backend(replies: Partial<Record<Route, Reply[]>>) {
     // Answered with an HTTP error, not a throw: postgrest-js retries network errors on reads.
     if (!route) return json(404, { code: "PGRST000", message: "unexpected request in test" });
     calls.push(route);
+    bodies.push({ route, body: typeof init?.body === "string" ? JSON.parse(init.body) : init?.body });
     const queue = replies[route] ?? (route === "sessions" ? [json(200, [])] : []);
     const reply = (queue.length > 1 ? queue.shift() : queue[0]) ?? json(500, {});
     if (reply === "network") throw new TypeError("fetch failed");
     return reply.clone();
   }) as typeof fetch;
-  return { calls, transport: new SupabaseTransport(URL_BASE, "sb_publishable_test", CREDS, fetchImpl) };
+  return { calls, bodies, transport: new SupabaseTransport(URL_BASE, "sb_publishable_test", CREDS, fetchImpl) };
 }
 
 const rejected = () => json(400, { code: 400, error_code: "invalid_credentials", msg: "Invalid login credentials" });
@@ -122,6 +124,44 @@ describe("SupabaseTransport sign-in", () => {
   });
 });
 
+describe("SupabaseTransport heartbeat (schema v4)", () => {
+  it("sends the failure category as a named argument, and nothing else about the failure", async () => {
+    const { transport, bodies } = backend({ token: [json(200, SESSION)], heartbeat: [json(200, "2026-10-29T12:00:00Z")] });
+    await transport.heartbeat(HEARTBEAT);
+    await transport.heartbeat({ ...HEARTBEAT, provider_ok: false, provider_error_kind: "cli_missing" });
+    expect(bodies.filter((b) => b.route === "heartbeat").map((b) => b.body)).toEqual([
+      { p_platform: "test", p_connector_version: "t", p_remote_control_allowed: false, p_provider_ok: true, p_provider_error_kind: null },
+      { p_platform: "test", p_connector_version: "t", p_remote_control_allowed: false, p_provider_ok: false, p_provider_error_kind: "cli_missing" },
+    ]);
+  });
+
+  it("sends nothing when the source's health and its category disagree", async () => {
+    const { transport, calls } = backend({ token: [json(200, SESSION)], heartbeat: [json(200, "2026-10-29T12:00:00Z")] });
+    for (const bad of [
+      { ...HEARTBEAT, provider_ok: false, provider_error_kind: null },
+      { ...HEARTBEAT, provider_ok: true, provider_error_kind: "cli_missing" as const },
+    ]) {
+      const e = await failure(transport.heartbeat(bad));
+      expect(e).not.toBeInstanceOf(HostAuthError);
+      expect(e.message).toBe("heartbeat not sent (invalid source health report)");
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it("names a project still on schema v3 (no v4 host_heartbeat, PGRST202) instead of looking offline", async () => {
+    const missing = json(404, {
+      code: "PGRST202",
+      message: "Could not find the function public.host_heartbeat(p_connector_version, p_platform, p_provider_error_kind, p_provider_ok, p_remote_control_allowed) in the schema cache",
+      details: "Searched for the function public.host_heartbeat with parameters ...",
+      hint: "Perhaps you meant to call the function public.host_heartbeat(p_connector_version, p_platform, p_provider_ok, p_remote_control_allowed)",
+    });
+    const e = await failure(backend({ token: [json(200, SESSION)], heartbeat: [missing] }).transport.heartbeat(HEARTBEAT));
+    expect(e).toBeInstanceOf(HostAuthError);
+    expect(e).toMatchObject({ remedy: "apply_migrations" });
+    expect(e.message).toBe("this project needs schema v4: apply the pending migrations (PGRST202)");
+  });
+});
+
 describe("SupabaseTransport transcript refusal", () => {
   const signedIn = { token: [json(200, SESSION)] };
 
@@ -180,6 +220,18 @@ describe("Connector with a refused host", () => {
     expect(logs).toHaveLength(1);
     expect(logs[0]).toContain("MC_SUPABASE_PUBLISHABLE_KEY");
     expect(logs[0]).not.toContain("may have been revoked");
+  });
+
+  it("says to apply the migrations, not to pair again, when the project is older than the connector", async () => {
+    const logs: string[] = [];
+    const missing = json(404, { code: "PGRST202", message: "Could not find the function public.host_heartbeat", details: null, hint: null });
+    const connector = start(backend({ token: [json(200, SESSION)], heartbeat: [missing] }).transport, logs);
+    expect(await connector.runOnce()).toBe(AUTH_RETRY_MS);
+    expect(await connector.runOnce()).toBe(AUTH_RETRY_MS);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/^backend out of date: this project needs schema v4: apply the pending migrations \(PGRST202\)/);
+    expect(logs[0]).not.toContain("may have been revoked");
+    expect(logs.some((l) => l.startsWith("offline"))).toBe(false);
   });
 
   it("goes from auth_failed to offline when the network then drops", async () => {

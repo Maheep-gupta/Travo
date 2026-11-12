@@ -9,7 +9,7 @@
 import { AuthRetryableFetchError } from "@supabase/supabase-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthUser } from "../src/api.js";
-import { MemoryStorage } from "../src/storage.js";
+import { MemoryStorage, type KeyValueStorage } from "../src/storage.js";
 import { authStorageKey, createSupabaseApi } from "../src/supabase-api.js";
 
 const URL_ = "https://example.supabase.co";
@@ -153,5 +153,46 @@ describe("close (Change backend)", () => {
     expect(fake.broadcasts).toBe(1);
     expect(events).toEqual([null]);
     expect(fake.disposed).toBe(1);
+  });
+
+  // I1: an async store (expo-secure-store in the future app) finishes removing
+  // later. close() and signOut() must not resolve before it has, or the next
+  // backend could be created while the sign-in is still stored.
+  describe("with an async store", () => {
+    /** Removes each key a few ms later, as a native store would. */
+    function slowStore(): KeyValueStorage {
+      return {
+        getItem: (k) => storage.getItem(k),
+        setItem: (k, v) => storage.setItem(k, v),
+        removeItem: (k) => new Promise<void>((resolve) => setTimeout(() => resolve(storage.removeItem(k)), 5)),
+      };
+    }
+
+    it("close() resolves only once the stored session is removed, even if auth-js can't remove it", async () => {
+      storage.setItem(`${KEY}-user`, "{}");
+      storage.setItem(`${KEY}-code-verifier`, "v");
+      fake.alwaysFail = true;
+      const api = createSupabaseApi({ url: URL_, publishableKey: "sb_publishable_0123456789abcdef" }, slowStore());
+      await api.close();
+      expect(storage.getItem(KEY)).toBeNull();
+      expect(storage.getItem(`${KEY}-user`)).toBeNull();
+      expect(storage.getItem(`${KEY}-code-verifier`)).toBeNull();
+      expect(fake.stopAutoRefresh).toBe(1);
+    });
+
+    it("signOut() resolves only once the stored session is removed when auth-js couldn't", async () => {
+      fake.storedError = new AuthRetryableFetchError("Failed to fetch", 0);
+      fake.alwaysFail = true;
+      const api = createSupabaseApi({ url: URL_, publishableKey: "sb_publishable_0123456789abcdef" }, slowStore());
+      await expect(api.signOut()).resolves.toEqual({ serverRevoked: false });
+      expect(storage.getItem(KEY)).toBeNull();
+    });
+
+    it("never rejects when the store refuses to remove", async () => {
+      fake.alwaysFail = true;
+      const refusing: KeyValueStorage = { ...slowStore(), removeItem: () => Promise.reject(new Error("SecurityError")) };
+      const api = createSupabaseApi({ url: URL_, publishableKey: "sb_publishable_0123456789abcdef" }, refusing);
+      await expect(api.close()).resolves.toBeUndefined();
+    });
   });
 });

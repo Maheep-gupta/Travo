@@ -1,4 +1,4 @@
-import type { HeartbeatInput, MessageRole, ProviderId, SessionStatus, SessionUpsert } from "@mc/contracts";
+import type { HeartbeatInput, MessageRole, ProviderErrorKind, ProviderId, SessionStatus, SessionUpsert } from "@mc/contracts";
 
 /** What a provider reports about one session. Content-free. */
 export interface ProviderSession {
@@ -21,17 +21,11 @@ export interface ProviderMessage {
 
 /**
  * Why a provider read failed, so diagnostics can say which. Content-free.
- * Every category means the same thing to the backend (provider_ok = false);
- * the distinction is for logs and the connector's own diagnostics.
+ * Since schema v4 the category (never the message) is reported with the
+ * heartbeat as provider_error_kind, so the app can say what to do.
+ * "writes_not_applied" is the connector's own category, not a provider's.
  */
-export type ProviderFailureCategory =
-  | "cli_missing"
-  | "auth_required"
-  | "timeout"
-  | "invalid_output"
-  | "incompatible_version"
-  | "interrupted"
-  | "failed";
+export type ProviderFailureCategory = Exclude<ProviderErrorKind, "writes_not_applied">;
 
 export interface Provider {
   readonly id: ProviderId;

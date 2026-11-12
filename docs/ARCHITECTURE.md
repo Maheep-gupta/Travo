@@ -52,7 +52,13 @@ There's no separate application server. Following the approved BYOS decision (do
 | Short JWT lifetime (15 minutes, `config.toml`) | Realtime caches its permission checks until the token expires | Never |
 | Live updates: Supabase Realtime, used to trigger query refetches | Realtime respects RLS. Data is always re-read through RLS-checked queries rather than trusted from the change payload. | Never |
 
-## Data model (schema v3)
+## Data model (schema v4)
+
+**v4, 2026-11-12: source failure categories (D-026, migration `20261112000001_provider_error_kind.sql`):**
+- Adds `hosts.provider_error_kind text`, checked against a fixed list (`PROVIDER_ERROR_KINDS` in `packages/contracts/src/constants.ts`): the seven Claude Code categories from D-025 plus `writes_not_applied`. Null while the source is healthy, and for a failure reported by a v3 connector. A second check requires `provider_error_since` whenever a category is set.
+- Replaces `host_heartbeat` with a 5-argument version: `p_provider_error_kind text default null`. It rejects a category on a healthy report and an unknown category (both `22023`), keeps `provider_error_since` semantics, and clears both columns on recovery. A failure can change category without restarting its `since`.
+- The default keeps a v3 connector's four-argument call working through an upgrade (PostgREST matches by argument names); its failures are stored without a category and shown with the generic message.
+- Clients require exactly v4: the host list selects `provider_error_kind`, which a v3 database doesn't have. The web host pages show the category's title and guidance (`sourceFailureText`, `packages/domain/src/source-failure.ts`).
 
 **v3, 2026-11-02: stale-write guard (spec 4.2 "out-of-order updates: newer wins"):**
 - Adds `sessions.observed_at`: when the connector observed the values it writes. Every connector write sends it (`SessionUpsert.observed_at`); clients don't read it, so it isn't in `SessionRow`.
@@ -69,7 +75,7 @@ There's no separate application server. Following the approved BYOS decision (do
 
 **v2, 2026-11-02:**
 - Adds `hosts.provider_error_since` (session source health).
-- Replaces `host_heartbeat` with a 4-argument version.
+- Replaces `host_heartbeat` with a 4-argument version (replaced again in v4).
 
 **Migration recovery:**
 - There are no down-migrations.

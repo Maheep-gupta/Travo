@@ -1,5 +1,5 @@
 import { createClient, isAuthApiError, type SupabaseClient } from "@supabase/supabase-js";
-import { SessionUpsert, type HeartbeatInput, type ProviderId } from "@mc/contracts";
+import { HeartbeatInput, SessionUpsert, type ProviderId } from "@mc/contracts";
 import { isKeyRejection } from "@mc/domain";
 import type { EventInput, KnownSession, MessageInput, Transport } from "../types.js";
 import type { HostCredentials } from "../credentials.js";
@@ -13,6 +13,7 @@ const REJECTED_SIGN_IN: ReadonlySet<number> = new Set([400, 401, 403]);
 // heartbeat passes PostgREST's error code too, so an expired host token
 // (PGRST30x) whose text mentions "API key" isn't mistaken for a bad key. Only matched, never logged.
 const KEY_REJECTED = "the project rejected the publishable key (401)";
+const SCHEMA_OUTDATED = "this project needs schema v4: apply the pending migrations (PGRST202)";
 
 /**
  * Writes to the user's Supabase project as the paired host user. Uses only
@@ -62,16 +63,24 @@ export class SupabaseTransport implements Transport {
   }
 
   async heartbeat(input: HeartbeatInput): Promise<void> {
+    // Checked before anything is sent; zod's issues quote values, so only a fixed message.
+    const checked = HeartbeatInput.safeParse(input);
+    if (!checked.success) throw new Error("heartbeat not sent (invalid source health report)");
     await this.ensureSignedIn();
     const { error, status } = await this.client.rpc("host_heartbeat", {
-      p_platform: input.platform,
-      p_connector_version: input.connector_version,
-      p_remote_control_allowed: input.remote_control_allowed,
-      p_provider_ok: input.provider_ok,
+      p_platform: checked.data.platform,
+      p_connector_version: checked.data.connector_version,
+      p_remote_control_allowed: checked.data.remote_control_allowed,
+      p_provider_ok: checked.data.provider_ok,
+      // A fixed category (schema v4) or null; never a message.
+      p_provider_error_kind: checked.data.provider_error_kind,
     });
     if (error) {
       // A key rotated while this connector was signed in.
       if (isKeyRejection({ message: error.message, hint: error.hint, code: error.code }, status)) throw new HostAuthError(KEY_REJECTED, "check_publishable_key");
+      // No host_heartbeat taking p_provider_error_kind: the project is still on
+      // schema v3. Retrying soon can't fix it, and it isn't an outage.
+      if (error.code === "PGRST202") throw new HostAuthError(SCHEMA_OUTDATED, "apply_migrations");
       // host_heartbeat raises 42501 when the caller is not an active host: a
       // revoked host keeps a working login, so this is where revocation shows.
       if (error.code === "42501") {

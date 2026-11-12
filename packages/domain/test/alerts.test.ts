@@ -91,6 +91,66 @@ describe("detectAlerts", () => {
     expect(alerts).toEqual([]);
   });
 
+  it("ignores a response older than one already seen (a slow refetch), so a dismissed alert isn't raised again", () => {
+    const at = (m: number) => `2026-10-29T12:0${m}:00.000Z`;
+    const alerts = run([
+      { sessions: [session({ updated_at: at(0) })], hosts: [host()] },
+      { sessions: [session({ status: "approval_required", last_activity_at: at(1), updated_at: at(1) })], hosts: [host()] },
+      { sessions: [session({ status: "running", last_activity_at: at(2), updated_at: at(2) })], hosts: [host()] },
+      // The approval response arrives late, after the newer "running" one.
+      { sessions: [session({ status: "approval_required", last_activity_at: at(1), updated_at: at(1) })], hosts: [host()] },
+      { sessions: [session({ status: "running", last_activity_at: at(2), updated_at: at(2) })], hosts: [host()] },
+    ]);
+    expect(alerts.map((a) => a.id)).toEqual([`s:s1:approval_required:${at(1)}`]);
+  });
+
+  it("alerts the same attention status again after unknown when activity moved on (a turn the source couldn't name)", () => {
+    const at = (m: number) => `2026-10-29T12:0${m}:00.000Z`;
+    const alerts = run([
+      { sessions: [session({ updated_at: at(0) })], hosts: [host()] },
+      { sessions: [session({ status: "approval_required", last_activity_at: at(1), updated_at: at(1) })], hosts: [host()] },
+      { sessions: [session({ status: "unknown", last_activity_at: at(2), updated_at: at(2) })], hosts: [host()] },
+      { sessions: [session({ status: "approval_required", last_activity_at: at(3), updated_at: at(3) })], hosts: [host()] },
+      { sessions: [session({ status: "unknown", last_activity_at: at(4), updated_at: at(4) })], hosts: [host()] },
+      { sessions: [session({ status: "failed", last_activity_at: at(5), updated_at: at(5) })], hosts: [host()] },
+    ]);
+    expect(alerts.map((a) => `${a.kind}:${a.at}`)).toEqual([`approval_required:${at(1)}`, `approval_required:${at(3)}`, `failed:${at(5)}`]);
+  });
+
+  it("raises nothing for the same status after unknown when activity didn't move, even once the first alert was dismissed", () => {
+    const at = (m: number) => `2026-10-29T12:0${m}:00.000Z`;
+    const alerts = run([
+      { sessions: [session({ updated_at: at(0) })], hosts: [host()] },
+      { sessions: [session({ status: "waiting_for_input", last_activity_at: at(1), updated_at: at(1) })], hosts: [host()] },
+      // Only updated_at moves: the source re-read the same turn.
+      { sessions: [session({ status: "unknown", last_activity_at: at(1), updated_at: at(2) })], hosts: [host()] },
+      { sessions: [session({ status: "waiting_for_input", last_activity_at: at(1), updated_at: at(3) })], hosts: [host()] },
+    ]);
+    // One alert only: detection itself doesn't re-raise it, so dismissing it can't bring it back.
+    expect(alerts.map((a) => a.id)).toEqual([`s:s1:waiting_for_input:${at(1)}`]);
+  });
+
+  it("stays silent after unknown when the session has no activity time to tell a new event by", () => {
+    const at = (m: number) => `2026-10-29T12:0${m}:00.000Z`;
+    const alerts = run([
+      { sessions: [session({ last_activity_at: null, updated_at: at(0) })], hosts: [host()] },
+      { sessions: [session({ status: "completed", last_activity_at: null, updated_at: at(1) })], hosts: [host()] },
+      { sessions: [session({ status: "unknown", last_activity_at: null, updated_at: at(2) })], hosts: [host()] },
+      { sessions: [session({ status: "completed", last_activity_at: null, updated_at: at(3) })], hosts: [host()] },
+    ]);
+    expect(alerts.map((a) => a.id)).toEqual([`s:s1:completed:${at(1)}`]);
+  });
+
+  it("does not alert a non-attention status regained after unknown", () => {
+    const at = (m: number) => `2026-10-29T12:0${m}:00.000Z`;
+    const alerts = run([
+      { sessions: [session({ updated_at: at(0) })], hosts: [host()] },
+      { sessions: [session({ status: "unknown", last_activity_at: at(1), updated_at: at(1) })], hosts: [host()] },
+      { sessions: [session({ status: "running", last_activity_at: at(2), updated_at: at(2) })], hosts: [host()] },
+    ]);
+    expect(alerts).toEqual([]);
+  });
+
   it("produces the same id for the same event, so repeated detection dedupes", () => {
     const steps = [
       { sessions: [session()], hosts: [host()] },

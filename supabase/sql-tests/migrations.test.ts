@@ -67,16 +67,17 @@ afterAll(async () => {
 });
 
 describe("migrations", () => {
-  it("apply in order on top of the shim and end at schema v3", async () => {
+  it("apply in order on top of the shim and end at schema v4", async () => {
     expect(migrationFiles()).toEqual([
       "20261029000001_schema_v1.sql",
       "20261102000001_source_health.sql",
       "20261103000001_stale_write_guard.sql",
       "20261104000001_fix_set_owner_from_host.sql",
       "20261105000001_security_hardening.sql",
+      "20261112000001_provider_error_kind.sql",
     ]);
     const [meta] = await as<{ schema_version: number }>(pg, anon, "select schema_version from public.app_meta");
-    expect(meta?.schema_version).toBe(3);
+    expect(meta?.schema_version).toBe(4);
   });
 
   it("publish only sessions and events to Realtime: no host heartbeats, never transcript messages", async () => {
@@ -255,6 +256,71 @@ describe("source health (schema v2)", () => {
 
   it("another owner cannot see a host's source health", async () => {
     expect(await as(pg, ownerB.who, "select provider_error_since from public.hosts where id = $1", [hostA.id])).toEqual([]);
+  });
+});
+
+describe("source failure categories (schema v4)", () => {
+  const beat = (ok: boolean | null, kind: string | null) =>
+    as(pg, hostA.who, "select public.host_heartbeat('win32', 't', false, $1, $2)", [ok, kind]);
+  const health = async () =>
+    (await as<{ provider_error_since: Date | null; provider_error_kind: string | null }>(
+      pg, ownerA.who, "select provider_error_since, provider_error_kind from public.hosts where id = $1", [hostA.id]))[0];
+
+  it("stores the category with the failure, follows a change of kind, and recovery clears both", async () => {
+    await beat(true, null);
+    expect(await health()).toEqual({ provider_error_since: null, provider_error_kind: null });
+    await beat(false, "cli_missing");
+    const first = await health();
+    expect(first?.provider_error_kind).toBe("cli_missing");
+    expect(first?.provider_error_since).toBeInstanceOf(Date);
+    await beat(false, "auth_required"); // same failure, new cause: the start is kept
+    expect(await health()).toEqual({ provider_error_since: first?.provider_error_since, provider_error_kind: "auth_required" });
+    await beat(true, null);
+    expect(await health()).toEqual({ provider_error_since: null, provider_error_kind: null });
+  });
+
+  it("accepts every known category", async () => {
+    for (const kind of ["cli_missing", "auth_required", "timeout", "invalid_output", "incompatible_version", "interrupted", "failed", "writes_not_applied"]) {
+      await beat(false, kind);
+      expect((await health())?.provider_error_kind).toBe(kind);
+    }
+    await beat(true, null);
+  });
+
+  it("rejects an unknown category, free text, and a category on a healthy source", async () => {
+    for (const kind of ["CLI_MISSING", "unknown", "", "claude: command not found at /home/dev/bin"]) {
+      expect(await failure(beat(false, kind))).toMatchObject({ code: "22023", message: "unknown provider error kind" });
+    }
+    expect(await failure(beat(true, "timeout"))).toMatchObject({ code: "22023", message: "a healthy source has no error kind" });
+    expect((await failure(beat(null, "timeout")))?.code).toBe("22004");
+    expect(await health()).toEqual({ provider_error_since: null, provider_error_kind: null }); // nothing was written
+  });
+
+  it("keeps a v3 connector's four-argument call working: its failure has no category", async () => {
+    await as(pg, hostA.who, "select public.host_heartbeat('win32', 't', false, false)");
+    const h = await health();
+    expect(h?.provider_error_since).toBeInstanceOf(Date);
+    expect(h?.provider_error_kind).toBeNull();
+    await as(pg, hostA.who, "select public.host_heartbeat('win32', 't', false, true)");
+    expect(await health()).toEqual({ provider_error_since: null, provider_error_kind: null });
+  });
+
+  it("only an active host can report a category", async () => {
+    expect(await failure(as(pg, ownerA.who, "select public.host_heartbeat('x', 'x', false, false, 'timeout')"))).toMatchObject({ code: "42501", message: "not an active host" });
+    expect((await failure(as(pg, anon, "select public.host_heartbeat('x', 'x', false, false, 'timeout')")))?.code).toBe("42501");
+    expect((await health())?.provider_error_kind).toBeNull();
+  });
+
+  it("nobody can write provider_error_kind directly, and the table enforces the list", async () => {
+    expect((await failure(as(pg, ownerA.who, "update public.hosts set provider_error_kind = 'timeout' where id = $1", [hostA.id])))?.code).toBe("42501");
+    expect((await failure(as(pg, hostA.who, "update public.hosts set provider_error_kind = 'timeout' where id = $1", [hostA.id])))?.code).toBe("42501");
+    // Even the database owner can't store free text, or a category without a failure.
+    expect((await failure(pg.query("update public.hosts set provider_error_since = now(), provider_error_kind = 'free text' where id = $1", [hostA.id])))?.code).toBe("23514");
+    expect((await failure(pg.query("update public.hosts set provider_error_since = null, provider_error_kind = 'timeout' where id = $1", [hostA.id])))?.code).toBe("23514");
+  });
+
+  it("another owner cannot see a host's failure category", async () => {
+    expect(await as(pg, ownerB.who, "select provider_error_kind from public.hosts where id = $1", [hostA.id])).toEqual([]);
   });
 });
 
@@ -630,7 +696,7 @@ describe("function privileges", () => {
     const can = async (role: string, fn: string) =>
       (await pg.query<{ ok: boolean }>("select has_function_privilege($1, $2, 'EXECUTE') as ok", [role, fn])).rows[0]?.ok;
     // owner_uid and jwt_host_id were replaced in 20261105000001; CREATE OR REPLACE must have kept these.
-    for (const fn of ["public.create_host_pairing(text)", "public.host_heartbeat(text, text, boolean, boolean)", "public.owner_uid()", "public.active_host_id()", "public.jwt_host_id()"]) {
+    for (const fn of ["public.create_host_pairing(text)", "public.host_heartbeat(text, text, boolean, boolean, text)", "public.owner_uid()", "public.active_host_id()", "public.jwt_host_id()"]) {
       expect(await can("anon", fn)).toBe(false);
       expect(await can("authenticated", fn)).toBe(true);
     }

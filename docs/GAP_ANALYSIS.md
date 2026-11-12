@@ -1,12 +1,12 @@
 # Tavro gap analysis (requirements traceability matrix)
 
 **Requirements source:** `docs/PRODUCT_SPEC.md` v1.0. Requirement IDs are the spec section numbers (D-016).
-**Last updated:** 2026-11-03, sixth cycle. This version includes a full spec audit by the product-manager role, which corrected several earlier claims, marked ✱.
+**Last updated:** 2026-11-12, seventh cycle. This version includes a full spec audit by the product-manager role, which corrected several earlier claims, marked ✱.
 **Owner:** product-manager role; statuses are updated by the main session after integrating each cycle.
-**Test baseline:** `npm run check:release` passes. That covers typecheck, lint, the build, bundle budgets and 930 tests:
+**Test baseline:** `npm run check:release` passes. That covers typecheck, lint, the build, bundle budgets and 1349 tests:
 - unit;
 - component (jsdom, with axe but no colour contrast);
-- 71 SQL-level tests in PGlite (D-021), which are **not** `test:db`.
+- 79 SQL-level tests in PGlite (D-021), which are **not** `test:db`.
 
 `test:db` has never run (Docker is blocked). `test:e2e` has never run (browser automation is blocked).
 
@@ -28,7 +28,7 @@
 | 1.1/1.3 | Purpose, users | Unit-test verified | `SetupPage.dom.test.tsx` "explains what Tavro does…" |
 | 1.2 | Principles: no false reassurance, honest capabilities | Unit-test verified | ✱ Previously breached by the headline, the pill and the Claude Code capability claim. All three fixed this cycle (D-023, `connectionIndicator`, `capabilities.ts`). |
 | 1.4 | Phone access | Blocked (founder decisions) | Architecture reviewed critically on 2026-11-03 (`PHONE_ACCESS.md`, `DEPLOYMENT.md`). Provisioning needs authorization. |
-| 2 | Product areas | Implemented | ✱ There is no separate "Diagnostics and connection health" area. Per-host health is on the host pages, and connector diagnostics come from `npm run connector -- doctor` (adapter-gated). **G27** |
+| 2 | Product areas | Implemented | Diagnostics and connection health: Settings > Diagnostics ("Copy report", allowlist-built, D-026), per-host health with the failure category and guidance on the host pages, and `npm run connector -- doctor` (adapter-gated). **G27 done 2026-11-12** (unit and component tests; not browser-verified). |
 | 2.1 | Navigation; backend indicator agrees with sync state | Integration-test verified | `statusIndicator` (`data-availability.test.ts`); `partial-data.dom.test.tsx` asserts the pill ("Incomplete", "Not refreshing", recovery); `route-focus.dom.test.tsx`. ✱ The pill used to say "Connected" while offline or while a list failed. Layout: Blocked (browser). |
 
 ### Dashboard (Part 3)
@@ -51,7 +51,7 @@
 | 4.2 | No duplicate transitions; retried transitions keep their key | Integration-test verified | D-024. `sleep-resume.test.ts` (connector), `connector.test.ts` |
 | 4.2 | No false transitions after sleep or network interruption | Integration-test verified (synthetic clocks) | D-024. `packages/domain/test/sleep-resume.test.ts`, `apps/connector/test/sleep-resume.test.ts`, `apps/web/src/sleep-resume.dom.test.tsx`. The grace is granted once per heartbeat, so repeated short looks at a dead host still alert (QA fix). A sleep shorter than 90 s can still produce a disconnect/reconnect pair. |
 | 4.2 | Out-of-order updates: newer wins | Integration-test verified (SQL level + connector); Database verified: Blocked (Docker) | D-015. `migrations.test.ts` "stale-write guard"; `rls.test.ts` not run |
-| 4.2 | Transition rules (approval → working only after a genuine update; completed → new lifecycle) | Not started | ✱ No explicit transition model (**G24**, lower value) |
+| 4.2 | Transition rules (approval → working only after a genuine update; completed → new lifecycle; missing data vs negative evidence) | Automated-test verified | D-027. `packages/domain/src/transitions.ts` (`decideTransition`, `classifyEdge`), used by `diffObservations` (connector event log, demo) and `detectAlerts` (a response older than one already seen is ignored by `updated_at`; "unknown" is lost evidence, so X → unknown → X raises a second alert only when X needs attention and `last_activity_at` moved on; the same or no activity time raises nothing). `packages/domain/test/transitions.test.ts` is table-driven over all 49 status pairs; `alerts.test.ts` adds the late-response and unknown cases. No DB rule added: ordering stays the v3 write guard (D-015). |
 | 4.3 | Session detail, source health, last update, related alerts | Unit-test verified | `SessionPage.dom.test.tsx`, `partial-data.dom.test.tsx` |
 | 4.3 | Transcript excerpts (spec) vs D-004 | Needs founder decision | The database now refuses transcripts unless enabled locally (D-022) |
 | 4.4 | No remote commands; read-only capabilities enforced by the database | Integration-test verified (SQL level) | D-022. `connector.test.ts` "never grants control capabilities"; `migrations.test.ts` capabilities check |
@@ -82,7 +82,7 @@
 | 7.2 | Discovery, version gate, execution boundary, malformed output, interruption, recovery | Integration-test verified (synthetic fixtures; real Node child processes) | D-025. `claude-code.test.ts`, `claude-code-process.test.ts`, `claude-code-version.test.ts`, `claude-code-connector.test.ts` |
 | 7.2 | Real CLI behaviour | Blocked (`test:db`, then founder approval) | 11-step checklist in `docs/INTEGRATIONS.md`. Version bounds are placeholders. |
 | 7.3 | Privacy: no paths, no raw stderr, generated titles by default | Unit-test verified | D-025. Whether CLI names come from prompts is unverified, so they aren't synced. |
-| 7.4 | Health distinctions | Unit-test verified | Failure categories (D-025). The UI still shows one "source not responding" message, because categories don't reach the database (**G27**). |
+| 7.4 | Health distinctions | Unit-test verified | Failure categories (D-025) reach the database as `hosts.provider_error_kind` (schema v4, D-026, PGlite-tested; `test:db` unrun) and the host pages show each category's title and what to do (`sourceFailureText`). A v3 connector's failures show the generic message. |
 | 7.5 | Adapter stays disabled until the gates pass | Unit-test verified | `config` test; `cli.ts` provider selection only after an authorized flip |
 | 8 | Honest provider capabilities | Unit-test verified | ✱ Fixed this cycle: `domain.test.ts` "claims for Claude Code only what its provider implements" |
 
@@ -94,7 +94,7 @@
 | 9.2 | Isolation, server side (RLS, forged identity, `owner_uid` fails closed) | Integration-test verified (SQL level); Database verified: Blocked | D-021, D-022. `migrations.test.ts`, `upgrade.test.ts` |
 | 10.2 | Persist only what's needed; transcripts off in the cloud; honest list cap | Integration-test verified | D-022. `session-list.test.ts` (real supabase-js: 501 rows give "500 most recent"; a malformed row is dropped and counted, never logged), `session-list-gaps.dom.test.tsx`. Retention is a manual purge only (`DEPLOYMENT.md` Operations). |
 | 10.3 | Sync: newer wins, dedupe, Realtime as invalidation only | Integration-test verified (SQL level + api-client) | `realtime-subscribe.test.ts` (INSERT/UPDATE only, private channel, join status). Settings → Application shows "Live updates: On / Unavailable (using 30 s refresh)". Real Realtime authorization: unverified. |
-| 10.4 | Pre-production database review | Blocked (Docker) | 70 PGlite tests; `rls.test.ts` (31+ cases) never run. Options in `docs/DB_TESTING.md`. |
+| 10.4 | Pre-production database review | Blocked (Docker) | 79 PGlite tests (v4 included); `rls.test.ts` (31+ cases) never run. Options in `docs/DB_TESTING.md`. |
 | 15.1/15.2 | Least privilege, no secrets, safe errors, CSP possible | Unit-test verified | `check-dist` secret rules, `edge-function-pins.test.mjs`, `generate-headers.test.mjs`, `errors.test.ts` |
 | 15.3 | Security review | In progress | Independent reviews every cycle. `npm audit`: founder decision. |
 | 15.4 | Absolute constraints | Complied | No bypasses; real adapter off; no relay |
@@ -103,11 +103,11 @@
 | ID | Requirement | Status | Evidence / remaining |
 |---|---|---|---|
 | 11.1 | First launch explains | Unit-test verified | `SetupPage.dom.test.tsx` |
-| 11.2 | Setup steps; pairing | Implemented | End to end: Blocked (Docker). ✱ No guided checklist (**G29**). |
+| 11.2 | Setup steps; pairing | Automated-test verified (unit + jsdom) | G29: `/setup` checklist built from existing evidence only (`packages/domain/src/setup-checklist.ts`, `SetupChecklistPage.tsx`), "can't tell" separate from "not done", demo labelled; a first-run preview; a dashboard "Continue setup" line outside demo. Pairing end to end: Blocked (Docker). Browser: Blocked. |
 | 11.3 | Never claim pairing succeeded; invalid config; schema mismatch | Unit-test verified | `pairing.test.ts`, `HostsPage.dom.test.tsx`, `form-errors.test.ts` |
-| 12 | Settings: every control real | Unit-test verified | `SettingsPage.dom.test.tsx`. ✱ No diagnostics section (**G27**). |
-| 13.1/13.2 | Design, responsive, mobile | Implemented (code review) | Mobile review on 2026-11-03: 4 High and 10 Medium findings. The self-contained ones are fixed (`mobile.css`, `route-focus.ts`, the copy). Remaining: **G30**. Browser and device: Blocked. |
-| 13.3 | Accessibility | Unit-test verified (jsdom axe; token contrast computed) | `a11y.dom.test.tsx`, `a11y-more.dom.test.tsx` (Alerts and Host pages), `contrast.test.ts` (391 pairs, both themes). Control borders (`--line-strong`) are below 3:1, recorded as `REPORTED_BOUNDARIES` (**G33**, design decision). Screen readers, focus order, blurred bars: Blocked (browser). |
+| 12 | Settings: every control real | Unit-test verified | `SettingsPage.dom.test.tsx`; Diagnostics section with "Copy report" and its select-the-text fallback in `diagnostics.dom.test.tsx` (**G27**). |
+| 13.1/13.2 | Design, responsive, mobile | Implemented (code review) | Mobile review on 2026-11-03: 4 High and 10 Medium findings. The self-contained ones are fixed (`mobile.css`, `route-focus.ts`, the copy). G30 (2026-11-12): filter disclosure below 720px, timeline fold (`timeline.ts`), banner safe-area, chip focus rings, one-column selects below 480px, 44px small buttons. The original Low 1/2/8/9/12 wording was never recorded; these fixes are a fresh pass, not the original list. Not fixed: sticky hover after tap, iOS tap highlight. Browser and device: Blocked. |
+| 13.3 | Accessibility | Unit-test verified (jsdom axe; token contrast computed) | `a11y.dom.test.tsx`, `a11y-more.dom.test.tsx` (Alerts and Host pages), `contrast.test.ts` (both themes). G33: controls use `--control-line` (≥3:1, enforced, with a guard on the control rules); decorative lines keep `--line-strong`. Setup colours covered. Screen readers, focus order, blurred bars: Blocked (browser). |
 | 14.1 | Manifest, install guidance | Unit-test verified (static) | `check-dist` manifest checks. Installability: Blocked. |
 | 14.2 | Offline behaviour; cached states never shown as live | Integration-test verified | D-019, D-023. `partial-data.dom.test.tsx` page + banner. No offline shell on a cold launch (no service worker, D-011). |
 | 14.3 | Device testing | Blocked | — |
@@ -149,16 +149,16 @@ Done: G1–G21. G13 finished 2026-11-03 (partial data D-023, sleep/resume D-024)
 |---|---|---|---|
 | G22 | Mark the Disconnected and Source chips as unknown while hosts are missing | S | **Done 2026-11-03** |
 | G23 | Keep dashboard filters when going back from a session | S | **Done 2026-11-03** |
-| G24 | Explicit transition model | M | Spec 4.2; lower value |
+| G24 | Explicit transition model | M | Spec 4.2. **Done (D-027)**: `packages/domain/src/transitions.ts` |
 | G25 | Mark read and dismiss a session's alerts from its page | S | **Done 2026-11-03** |
 | G26 | Name resolution states on the Alerts page | S | **Done 2026-11-03**, with focus and announcements |
-| G27 | Diagnostics: provider failure categories reach the UI; Settings diagnostics with "copy report" | M | Spec 2 area 10, 7.4, 12. Categories need a DB contract change (a schema bump), so design carefully. |
+| G27 | Diagnostics: provider failure categories reach the UI; Settings diagnostics with "copy report" | M | **Done 2026-11-12 (D-026)**: schema v4 `provider_error_kind`, host-page guidance, `buildDiagnosticsReport` (no-leak test). Not browser-verified; `test:db` cases written, unrun. |
 | G28 | List truncation honesty; malformed rows; retention | M | **Done 2026-11-03** except retention (a manual purge). Hosts still fail whole on a bad row, on purpose: a dropped host would show its sessions as disconnected. |
-| G29 | Guided setup checklist | M | Spec 11.2 |
-| G30 | Remaining mobile review items: H4b filter disclosure, M2 timeline length, M9/M10 iOS status bar and sticky banner (device check), Low 1/2/8/9/12 | S–M | Spec 13 |
+| G29 | Guided setup checklist | M | Spec 11.2. **Done 2026-11-12** |
+| G30 | Remaining mobile review items: H4b filter disclosure, M2 timeline length, M9/M10 iOS status bar and sticky banner (device check), Low 1/2/8/9/12 | S–M | Spec 13. **Done 2026-11-12** in code; device check still needed |
 | G31 | Axe on AlertsPage and HostPage; token contrast test | S | **Done 2026-11-03** |
-| G32 | Review follow-ups | S | LOW-3, LOW-4 and the shared `isKeyRejection` **done 2026-11-03**. Still open: backlog L2, L3, I1 and I3. |
-| G33 | Control borders below 3:1 non-text contrast | S | Design decision: raising `--line-strong` changes every border. Pinned in `contrast.test.ts`. |
+| G32 | Review follow-ups | S | LOW-3, LOW-4 and the shared `isKeyRejection` **done 2026-11-03**. L2, L3, I1 and I3 **done 2026-11-12**; every read and write the app makes is now pinned to the signed-in user (`asUser`). |
+| G33 | Control borders below 3:1 non-text contrast | S | Design decision: raising `--line-strong` changes every border. **Done 2026-11-12**: separate `--control-line` token. |
 
 ## Founder decisions pending
 1. Licence. The public repo has none, so it's all rights reserved.

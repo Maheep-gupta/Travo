@@ -1,5 +1,6 @@
 import type { NotificationPrefs, SessionStatus } from "@mc/contracts";
 import { DISCONNECT_AFTER_MS, type HostConnectivity } from "./hosts.js";
+import { decideTransition, initialRecord, type TransitionRecord } from "./transitions.js";
 
 /**
  * Tavro Alerts: attention events derived by comparing successive snapshots of
@@ -90,8 +91,17 @@ export interface AlertHostInput {
 
 /** What detection remembers between runs. */
 export interface AlertSnapshot {
-  /** Last status observed while the session's host was online (the last trusted status). */
-  sessions: ReadonlyMap<string, SessionStatus>;
+  /**
+   * Per session, the last status observed while its host and source were
+   * trusted, with the last known one (across "unknown") and its updated_at.
+   */
+  sessions: ReadonlyMap<string, TransitionRecord>;
+  /**
+   * Per session, the last_activity_at that came with its known status (the
+   * last trusted read that wasn't "unknown"), so a return from "unknown" can
+   * tell a new event from the one already seen.
+   */
+  knownActivity: ReadonlyMap<string, string | null>;
   hosts: ReadonlyMap<string, HostConnectivity>;
   /** Source health per host, recorded only while the host was online (otherwise unknown). */
   sources: ReadonlyMap<string, boolean>;
@@ -120,6 +130,13 @@ export interface AlertDetection {
  *   an offline host the last trusted status is carried forward and nothing is
  *   alerted; if the status changed during the outage, the alert fires once the
  *   host is back, and an unchanged status produces no alert.
+ * - Session statuses go through the transition model (transitions.ts), keyed
+ *   by the row's updated_at: a response older than one already seen (a slow
+ *   refetch racing a newer one) is ignored, and "unknown" only loses evidence.
+ *   X → unknown → X (X an attention state) alerts again only if the session's
+ *   last_activity_at is newer than the one X was last seen with: the source
+ *   may have missed a whole turn it couldn't name, so it is a new event. The
+ *   same activity time raises nothing, even if that alert was dismissed.
  * - Hosts alert on online → disconnected and disconnected → online only. First
  *   connections and revocations are not attention events.
  * - Session source health (e.g. the Claude CLI failing while the host still
@@ -195,26 +212,50 @@ export function detectAlerts(
     }
   }
 
-  const sessionSnapshot = new Map<string, SessionStatus>();
+  const sessionSnapshot = new Map<string, TransitionRecord>();
+  const activitySnapshot = new Map<string, string | null>();
   for (const s of sessions) {
     const trustedBefore = previous?.sessions.get(s.id);
+    const activityBefore = previous?.knownActivity.get(s.id);
     const host = hostById.get(s.host_id);
     if (host?.connectivity !== "online" || host.provider_error_since !== null) {
       // Untrusted right now: alert on nothing. Keep what we knew; a session we
       // have not seen yet is recorded with its stored status, so an unchanged
       // status is not mistaken for a new event once the host is back.
-      sessionSnapshot.set(s.id, trustedBefore ?? s.status);
+      sessionSnapshot.set(s.id, trustedBefore ?? initialRecord(s.status, s.updated_at));
+      activitySnapshot.set(s.id, trustedBefore ? (activityBefore ?? null) : s.last_activity_at);
       continue;
     }
-    sessionSnapshot.set(s.id, s.status);
-    if (!previous || trustedBefore === s.status) continue;
-    const relevant = trustedBefore === undefined ? NEW_SESSION_ALERT_KINDS : SESSION_ALERT_KINDS;
+    const decision = decideTransition(trustedBefore ?? null, { kind: "listed", status: s.status, observedAt: s.updated_at });
+    // "ignored" here is an out-of-order response: keep the newer record.
+    const record = decision.record ?? initialRecord(s.status, s.updated_at);
+    sessionSnapshot.set(s.id, record);
+    // The known status's activity moves only with a read that names a status.
+    const named = decision.outcome !== "ignored" && record.status !== "unknown";
+    activitySnapshot.set(s.id, named || activityBefore === undefined ? s.last_activity_at : activityBefore);
+    if (!previous) continue;
+    let relevant: ReadonlySet<SessionStatus>;
+    if (decision.outcome === "transition") relevant = decision.edge === "discovered" ? NEW_SESSION_ALERT_KINDS : SESSION_ALERT_KINDS;
+    // Back from "unknown" to the status known before it: the source may have
+    // missed a whole turn (a working phase it couldn't name), so newer activity
+    // is a new event. Without an activity time a new event can't be told from
+    // the old one (updated_at moves on every write), so it stays silent.
+    else if (decision.outcome === "evidence" && decision.reason === "evidence_regained" && isNewer(s.last_activity_at, activityBefore ?? null)) relevant = SESSION_ALERT_KINDS;
+    else continue;
     if (!relevant.has(s.status)) continue;
     const at = s.last_activity_at ?? s.updated_at;
     alerts.push({ id: `s:${s.id}:${s.status}:${at}`, kind: s.status as AlertKind, sessionId: s.id, hostId: s.host_id, at, isDemo: s.is_demo });
   }
 
-  return { alerts, snapshot: { sessions: sessionSnapshot, hosts: hostSnapshot, sources: sourceSnapshot, observedAt: fetchedAt, watchingSince, graced: gracedSnapshot } };
+  return { alerts, snapshot: { sessions: sessionSnapshot, knownActivity: activitySnapshot, hosts: hostSnapshot, sources: sourceSnapshot, observedAt: fetchedAt, watchingSince, graced: gracedSnapshot } };
+}
+
+/** True when `observed` is a valid time strictly after `seen`, or nothing valid was seen. */
+function isNewer(observed: string | null, seen: string | null): boolean {
+  const o = observed === null ? NaN : Date.parse(observed);
+  if (Number.isNaN(o)) return false;
+  const p = seen === null ? NaN : Date.parse(seen);
+  return Number.isNaN(p) || o > p;
 }
 
 export const MAX_STORED_ALERTS = 50;

@@ -9,7 +9,7 @@ import type {
 } from "@mc/contracts";
 import { DemoSimulator } from "@mc/demo";
 import { PROVIDERS, diffObservations } from "@mc/domain";
-import { ApiError, type AuthUser, type ChangeTopic, type TavroApi } from "./api.js";
+import { ACCOUNT_CHANGED_MESSAGE, ApiError, type AuthUser, type ChangeTopic, type ReadOptions, type TavroApi } from "./api.js";
 import { createSessionListStore } from "./session-list-store.js";
 
 export interface DemoApiOptions {
@@ -70,6 +70,7 @@ export function createDemoApi(opts: DemoApiOptions = {}): TavroApi {
         remote_control_allowed: false,
         last_seen_at: iso(startedAt),
         provider_error_since: null,
+        provider_error_kind: null,
         paired_at: iso(startedAt - 86_400_000),
         revoked_at: null,
         created_at: iso(startedAt - 86_400_000),
@@ -86,6 +87,7 @@ export function createDemoApi(opts: DemoApiOptions = {}): TavroApi {
         remote_control_allowed: false,
         last_seen_at: iso(startedAt - 3 * 3_600_000),
         provider_error_since: null,
+        provider_error_kind: null,
         paired_at: iso(startedAt - 7 * 86_400_000),
         revoked_at: null,
         created_at: iso(startedAt - 7 * 86_400_000),
@@ -139,8 +141,14 @@ export function createDemoApi(opts: DemoApiOptions = {}): TavroApi {
     const host = hosts.get(DEMO_HOST);
     if (!host || host.revoked_at) return;
     const ok = sourceOk(t);
-    // Same rule as the host_heartbeat function: keep the start of an ongoing failure.
-    hosts.set(DEMO_HOST, { ...host, last_seen_at: iso(t), provider_error_since: ok ? null : (host.provider_error_since ?? iso(t)) });
+    // Same rule as the host_heartbeat function: keep the start of an ongoing
+    // failure, clear both columns on recovery. The simulated outage is a timeout.
+    hosts.set(DEMO_HOST, {
+      ...host,
+      last_seen_at: iso(t),
+      provider_error_since: ok ? null : (host.provider_error_since ?? iso(t)),
+      provider_error_kind: ok ? null : "timeout",
+    });
     emit("hosts");
     if (!ok) return; // source "not responding": heartbeat only, sessions untouched
     // Same rule as the schema v3 guard: an older observation never overwrites a newer one.
@@ -214,8 +222,10 @@ export function createDemoApi(opts: DemoApiOptions = {}): TavroApi {
     }
   };
 
-  const requireUser = () => {
+  const requireUser = (options?: ReadOptions) => {
     if (!signedIn) throw new ApiError("Please sign in.", "unauthorized");
+    // One fixed user, so only a caller expecting someone else is refused (ReadOptions).
+    if (options?.asUser !== undefined && options.asUser !== user.id) throw new ApiError(ACCOUNT_CHANGED_MESSAGE, "account_changed");
     // Manual-clock mode (tests): advance on every read instead of a timer.
     if (tickMs === 0) sync();
   };
@@ -248,8 +258,8 @@ export function createDemoApi(opts: DemoApiOptions = {}): TavroApi {
     onAuthChange() {
       return () => undefined;
     },
-    async listSessions() {
-      requireUser();
+    async listSessions(options) {
+      requireUser(options);
       // The Supabase backend's rule: most recent activity first (none yet last), then id, capped at the limit.
       const token = sessionList.begin();
       const all = [...sessions.values()].sort(
@@ -258,19 +268,19 @@ export function createDemoApi(opts: DemoApiOptions = {}): TavroApi {
       sessionList.report(token, { truncated: all.length > SESSION_LIST_LIMIT, dropped: 0 });
       return all.slice(0, SESSION_LIST_LIMIT);
     },
-    async getSession(id) {
-      requireUser();
+    async getSession(id, options) {
+      requireUser(options);
       return sessions.get(id) ?? null;
     },
-    async listEvents(sessionId, limit = 100) {
-      requireUser();
+    async listEvents(sessionId, limit = 100, options) {
+      requireUser(options);
       return events
         .filter((e) => e.session_id === sessionId)
         .sort((a, b) => b.occurred_at.localeCompare(a.occurred_at) || b.id - a.id)
         .slice(0, limit);
     },
-    async listMessages(sessionId, limit = 50): Promise<SessionMessageRow[]> {
-      requireUser();
+    async listMessages(sessionId, limit = 50, options): Promise<SessionMessageRow[]> {
+      requireUser(options);
       const s = sessions.get(sessionId);
       if (!s) return [];
       return sim
@@ -278,26 +288,27 @@ export function createDemoApi(opts: DemoApiOptions = {}): TavroApi {
         .slice(-limit)
         .map((m, i) => ({ id: i + 1, session_id: sessionId, external_uuid: m.external_uuid, role: m.role, text: m.text, occurred_at: m.occurred_at }));
     },
-    async listHosts() {
-      requireUser();
+    async listHosts(options) {
+      requireUser(options);
       return [...hosts.values()];
     },
-    async createHostPairing() {
+    async createHostPairing(_name, options) {
+      requireUser(options);
       throw new ApiError("Pairing is not available in demo mode. Connect a Supabase project to pair a real host.", "invalid");
     },
-    async revokeHost(hostId) {
-      requireUser();
+    async revokeHost(hostId, options) {
+      requireUser(options);
       const h = hosts.get(hostId);
       if (!h) throw new ApiError("Host not found.", "not_found");
       if (!h.revoked_at) hosts.set(hostId, { ...h, revoked_at: iso(now()) });
       emit("hosts");
     },
-    async getNotificationPrefs() {
-      requireUser();
+    async getNotificationPrefs(options) {
+      requireUser(options);
       return prefs;
     },
-    async saveNotificationPrefs(p) {
-      requireUser();
+    async saveNotificationPrefs(p, options) {
+      requireUser(options);
       prefs = { ...DEFAULT_NOTIFICATION_PREFS, ...p };
     },
     subscribe(cb) {

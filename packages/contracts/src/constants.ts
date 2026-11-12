@@ -7,8 +7,30 @@ import type { NotificationPrefs } from "./preferences.js";
  * refuse to run against a project whose public.app_meta.schema_version is
  * outside [MIN_SCHEMA_VERSION, MAX_SCHEMA_VERSION].
  */
-export const MIN_SCHEMA_VERSION = 3;
-export const MAX_SCHEMA_VERSION = 3;
+export const MIN_SCHEMA_VERSION = 4;
+export const MAX_SCHEMA_VERSION = 4;
+
+/**
+ * Why a host's session source isn't answering (schema v4,
+ * hosts.provider_error_kind). Fixed categories only: no message, path or
+ * command output ever crosses the wire. Must match the CHECK constraint in
+ * supabase/migrations/20261112000001_provider_error_kind.sql.
+ * - The first seven are the Claude Code provider's failure categories (D-025);
+ *   any other provider failure is reported as "failed".
+ * - "writes_not_applied": the source read fine, but the backend kept refusing
+ *   or skipping this host's session writes (clock behind, or a second
+ *   connector for the same host), so its statuses are frozen.
+ */
+export const PROVIDER_ERROR_KINDS = [
+  "cli_missing",
+  "auth_required",
+  "timeout",
+  "invalid_output",
+  "incompatible_version",
+  "interrupted",
+  "failed",
+  "writes_not_applied",
+] as const;
 
 /**
  * How far ahead of the database clock a session's observed_at may be; later

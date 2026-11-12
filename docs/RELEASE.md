@@ -12,7 +12,7 @@ Tavro uses [semantic versioning](https://semver.org): `MAJOR.MINOR.PATCH`. While
 | MINOR | New features, a new migration that keeps `schema_version`, or a new connector option with a safe default. |
 | MAJOR (from 1.0) | A new `schema_version` that old clients refuse, or a breaking change to the connector's configuration. |
 
-Independently of the app version, a migration that changes what clients see raises `schema_version` (`MAX_SCHEMA_VERSION` in `packages/contracts/src/constants.ts`, currently 3). Clients require exactly that version, so web and connector must ship together with it.
+Independently of the app version, a migration that changes what clients see raises `schema_version` (`MAX_SCHEMA_VERSION` in `packages/contracts/src/constants.ts`, currently 4). Clients require exactly that version, so web and connector must ship together with it.
 
 **Where the version comes from:**
 - **Web app:** `version` in `apps/web/package.json`. `apps/web/src/app-info.ts` imports it as `APP_VERSION`, and **Settings → Application** shows it, next to the Vite build mode (`production` for a release build).
@@ -29,7 +29,7 @@ Today all three versions are `0.1.0`. Bump them in the release commit, and keep 
 4. **Establish the test:db gate** for that exact commit (`docs/DEPLOYMENT.md` → *The test:db gate*). It runs on a machine with Docker or in CI, and is recorded in `docs/QUALITY.md`.
 5. **Walk the release checklist** in `docs/QUALITY.md` → *Release checklist (M9)*. Update each row to what actually ran. A row stays *unverified* unless its check ran.
 6. **Tag locally:** `git tag -a v<version> -m "Tavro <version>"`. Pushing the tag needs authorization like any push.
-7. **Deploy** by following `docs/DEPLOYMENT.md` from the step that applies: a release with no migration and no function change starts at step 6.
+7. **Deploy** by following `docs/DEPLOYMENT.md` from the step that applies: a release with no migration and no function change starts at step 6. **Migrations go first, connectors last.** For schema v4, apply `20261112000001_provider_error_kind.sql` before upgrading any connector: a v4 connector against a v3 project gets PGRST202 on every heartbeat, logs "this project needs schema v4: apply the pending migrations" and its host shows as Disconnected until the migration is applied.
 8. **After deployment:** run the post-deploy checks (`DEPLOYMENT.md` steps 9 and 9b), record them in `docs/QUALITY.md`, then delete old Cloudflare deployments except one for rollback (step 8.6).
 
 ## Environment and configuration

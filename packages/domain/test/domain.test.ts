@@ -281,12 +281,14 @@ describe("schema compatibility", () => {
     expect(checkSchemaCompat(null)).toMatchObject({ ok: false, reason: "not_installed" });
     expect(checkSchemaCompat(0)).toMatchObject({ ok: false, reason: "too_old" });
     expect(checkSchemaCompat(99)).toMatchObject({ ok: false, reason: "too_new" });
-    // v3 (stale-write guard) is required: v1 lacks hosts.provider_error_since and
-    // v2 lacks sessions.observed_at, which every connector write now carries.
+    // v4 (failure categories) is required: v1 lacks hosts.provider_error_since,
+    // v2 lacks sessions.observed_at, which every connector write now carries,
+    // and v3 lacks hosts.provider_error_kind, which the host list selects.
     expect(checkSchemaCompat(1)).toMatchObject({ ok: false, reason: "too_old" });
     expect(checkSchemaCompat(2)).toMatchObject({ ok: false, reason: "too_old" });
-    expect(checkSchemaCompat(3)).toEqual({ ok: true });
-    expect(checkSchemaCompat(4)).toMatchObject({ ok: false, reason: "too_new" });
+    expect(checkSchemaCompat(3)).toMatchObject({ ok: false, reason: "too_old" });
+    expect(checkSchemaCompat(4)).toEqual({ ok: true });
+    expect(checkSchemaCompat(5)).toMatchObject({ ok: false, reason: "too_new" });
   });
 });
 

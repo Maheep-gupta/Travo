@@ -3,6 +3,7 @@ import {
   DASHBOARD_FILTER_KEYS,
   DASHBOARD_ORIGIN_MAX_LENGTH,
   EMPTY_DASHBOARD_FILTER,
+  collapsedFilterCount,
   EXTRA_STATES,
   HOST_DERIVED_STATES,
   OVERVIEW_STATES,
@@ -237,5 +238,17 @@ describe("dashboardReturnPath", () => {
   it("ignores an inherited origin", () => {
     const inherited = Object.create({ dashboardOrigin: { pathname: "/", search: "?q=x" } }) as object;
     expect(dashboardReturnPath(inherited)).toBeNull();
+  });
+});
+
+describe("collapsedFilterCount (narrow-screen Filters button, H4b)", () => {
+  it("counts host, project, integration and a non-default sort", () => {
+    expect(collapsedFilterCount(EMPTY_DASHBOARD_FILTER)).toBe(0);
+    expect(collapsedFilterCount({ ...EMPTY_DASHBOARD_FILTER, host: "h1", project: "api" })).toBe(2);
+    expect(collapsedFilterCount({ ...EMPTY_DASHBOARD_FILTER, provider: "mock", sort: "recent" })).toBe(2);
+  });
+
+  it("ignores what stays visible outside the disclosure (search, state chips)", () => {
+    expect(collapsedFilterCount({ ...EMPTY_DASHBOARD_FILTER, query: "x", state: "failed", group: "attention" })).toBe(0);
   });
 });

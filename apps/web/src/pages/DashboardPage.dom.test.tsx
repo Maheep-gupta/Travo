@@ -13,7 +13,7 @@ import { DashboardPage } from "./DashboardPage.js";
 import { SessionPage } from "./SessionPage.js";
 
 /** Set by a test to make the host list fail, as a down hosts service would. */
-const fail = vi.hoisted(() => ({ hosts: false }));
+const fail = vi.hoisted(() => ({ hosts: false, live: false, noHosts: false }));
 
 vi.mock("../platform.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../platform.js")>();
@@ -23,7 +23,12 @@ vi.mock("../platform.js", async (importOriginal) => {
     loadBackendChoice: () => ({ kind: "demo" }),
     createApi: () => {
       const api = createDemoApi({ tickMs: 0, sourceOutageMs: 0 });
-      return Promise.resolve({ ...api, listHosts: () => (fail.hosts ? Promise.reject(new ApiError("The hosts service is down.", "unavailable")) : api.listHosts()) });
+      return Promise.resolve({
+        ...api,
+        // "live" presents the same data as a connected project, for the setup nudge (shown only outside demo mode).
+        kind: fail.live ? ("supabase" as const) : api.kind,
+        listHosts: () => (fail.hosts ? Promise.reject(new ApiError("The hosts service is down.", "unavailable")) : fail.noHosts ? Promise.resolve([]) : api.listHosts()),
+      });
     },
   };
 });
@@ -35,6 +40,8 @@ afterEach(() => {
   queryClient.clear();
   window.localStorage.clear();
   fail.hosts = false;
+  fail.live = false;
+  fail.noHosts = false;
 });
 
 function ApiReady({ children }: { children: ReactNode }) {
@@ -110,6 +117,34 @@ const RECENT_ORDER = [
 ];
 
 describe("DashboardPage", () => {
+  describe("setup nudge", () => {
+    const nudge = () => screen.queryByRole("link", { name: "Continue setup" });
+
+    it("points to the checklist while required steps are not done, outside demo mode", async () => {
+      fail.live = true;
+      fail.noHosts = true;
+      await renderDashboard();
+      await waitFor(() => expect(nudge()).not.toBeNull());
+      expect(nudge()?.getAttribute("href")).toBe("/setup");
+      expect(nudge()?.closest(".notice")?.textContent).toMatch(/^\d of 6 setup steps done\. Continue setup$/);
+    });
+
+    it("is hidden when setup is complete", async () => {
+      fail.live = true;
+      await renderDashboard();
+      // The host list has settled once its filter lists the hosts; only then can the checklist be judged.
+      await waitFor(() => expect(within(screen.getByRole("combobox", { name: "Host" })).getAllByRole("option").length).toBeGreaterThan(1));
+      expect(screen.queryByText(/setup steps done/)).toBeNull();
+    });
+
+    it("is hidden in demo mode, even though setup is incomplete", async () => {
+      fail.noHosts = true;
+      await renderDashboard();
+      await screen.findByRole("button", { name: "All: 7 sessions" });
+      expect(screen.queryByText(/setup steps done/)).toBeNull();
+    });
+  });
+
   it("shows the total, Need you and a count for every spec state", async () => {
     await renderDashboard();
     for (const name of [
@@ -408,5 +443,42 @@ describe("DashboardPage to a session and back (G23, G25)", () => {
     expect(within(card("Investigate memory leak")).queryByText(/unread alert/)).toBeNull();
     expect(card("Investigate memory leak").classList.contains("has-unread")).toBe(false);
     expect(screen.queryByRole("link", { name: /unread alert/ })).toBeNull();
+  });
+});
+
+describe("Filters and sort disclosure (mobile review H4b)", () => {
+  // jsdom loads no stylesheets: below 720px styles.css hides the panel until it is open and,
+  // from 720px, hides the button and shows the panel. These tests cover the semantics only.
+  const toggle = (name: string) => screen.getByRole("button", { name });
+  const panelOf = (button: HTMLElement) => document.getElementById(button.getAttribute("aria-controls") ?? "") as HTMLElement;
+
+  it("is a native, collapsed button that controls the four selects, and opens and closes", async () => {
+    await renderDashboard();
+    const button = toggle("Filters and sort");
+    expect(button.tagName).toBe("BUTTON");
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    const panel = panelOf(button);
+    expect(within(panel).getAllByRole("combobox")).toHaveLength(4);
+    for (const name of ["Host", "Project", "Integration", "Sort by"]) expect(within(panel).getByRole("combobox", { name })).toBeTruthy();
+    // Search and the state chips stay outside it: they are the quickest filters on a phone.
+    expect(panel.contains(screen.getByRole("searchbox", { name: "Search sessions" }))).toBe(false);
+    // The panel follows the button in the DOM, so Tab reaches the selects straight after opening.
+    expect(button.nextElementSibling).toBe(panel);
+    expect(panel.classList.contains("open")).toBe(false);
+
+    fireEvent.click(button);
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    expect(panel.classList.contains("open")).toBe(true);
+    fireEvent.click(button);
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("says how many settings are set inside it while closed", async () => {
+    await renderDashboard("/?project=payments-api&sort=recent");
+    const button = toggle("Filters and sort, 2 set");
+    expect(button.querySelector(".badge-count")?.textContent).toBe("2");
+    // The search and a state chip are visible outside the panel, so they aren't counted.
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search sessions" }), { target: { value: "auth" } });
+    expect(toggle("Filters and sort, 2 set")).toBe(button);
   });
 });

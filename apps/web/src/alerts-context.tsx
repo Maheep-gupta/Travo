@@ -98,20 +98,24 @@ function ownedBy(rows: readonly { owner_id: string }[], userId: string): boolean
 function AlertWatcher({ store, userId }: { store: AlertStore; userId: string }) {
   const api = useApi();
   const navigate = useNavigate();
-  // Same keys as the pages (user id included), so the baseline only ever sees this user's data.
+  // Same keys as the pages (user id included), so the baseline only ever sees
+  // this user's data. Every observer of these keys pins its reads to the user
+  // (asUser): a sign-in in another tab can swap the stored token before this
+  // tab hears of it, and that account's answer, even an empty list or "no
+  // preferences saved", would otherwise be cached here as this user's (L3).
   const sessions = useQuery({
     queryKey: userKey(api, userId, "sessions", "list"),
-    queryFn: () => api.listSessions(),
+    queryFn: () => api.listSessions({ asUser: userId }),
     refetchInterval: HEARTBEAT_INTERVAL_MS,
     refetchIntervalInBackground: true,
   });
   const hosts = useQuery({
     queryKey: userKey(api, userId, "hosts"),
-    queryFn: () => api.listHosts(),
+    queryFn: () => api.listHosts({ asUser: userId }),
     refetchInterval: HEARTBEAT_INTERVAL_MS,
     refetchIntervalInBackground: true,
   });
-  const prefs = useQuery({ queryKey: userKey(api, userId, "prefs"), queryFn: () => api.getNotificationPrefs() });
+  const prefs = useQuery({ queryKey: userKey(api, userId, "prefs"), queryFn: () => api.getNotificationPrefs({ asUser: userId }) });
   const snapshot = useRef<AlertSnapshot | null>(null);
   const [announcement, setAnnouncement] = useState("");
   // Alerts notified recently, so a burst becomes one summary (spec 16: no
@@ -145,9 +149,8 @@ function AlertWatcher({ store, userId }: { store: AlertStore; userId: string }) 
   useEffect(() => {
     if (!sessions.data || !hosts.data || sessions.error || hosts.error || prefs.isLoading || prefs.error) return;
     if (typeof navigator !== "undefined" && navigator.onLine === false) return;
-    // Tabs share one stored sign-in: one in another tab can swap the token
-    // before this tab hears of it, and answers then belong to that account.
-    // They must never be baselined or stored under this user.
+    // Defence in depth behind the pinned reads: rows of another account are
+    // never baselined or stored under this user.
     if (!ownedBy(sessions.data, userId) || !ownedBy(hosts.data, userId)) return;
     const isDemo = api.kind === "demo";
     const observedAt = new Date(hosts.dataUpdatedAt);

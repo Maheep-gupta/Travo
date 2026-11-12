@@ -156,7 +156,12 @@ describe("SessionPage", () => {
 
     const head = detailHead();
     await waitFor(() => expect(within(head).getByText("Source not responding")).toBeTruthy(), { timeout: 5000 });
-    expect(head.textContent).toContain("Demo laptop is online but can't read its sessions right now, so this state may be out of date. Last reported:");
+    expect(head.textContent).toContain("The host can't read its sessions, so this state may be out of date. Last reported:");
+    // The host's failure category (the demo simulates a timeout), what to do while it is online, and a way to the host.
+    expect(head.textContent).toContain("Reading sessions timed out. The host may be busy or just woke from sleep");
+    expect(head.textContent).not.toContain("`");
+    const hostLink = within(head).getByRole("link", { name: "View Demo laptop" });
+    expect(hostLink.getAttribute("href")).toBe(`/hosts/${live.host_id}`);
     expect(screen.queryByText(/has stopped reporting/)).toBeNull();
     if (live.status_reason) expect(head.textContent).not.toContain(live.status_reason);
     expect(within(section("Details")).getByText("Online")).toBeTruthy();
@@ -166,7 +171,7 @@ describe("SessionPage", () => {
     renderSession(UNKNOWN_ID);
     const title = await screen.findByRole("heading", { name: "Session not found" }, { timeout: 5000 });
     expect(screen.getByRole("heading", { level: 1, name: "Session" })).toBeTruthy();
-    const state = title.closest("[role=status]") as HTMLElement;
+    const state = title.closest("[role=group]") as HTMLElement;
     expect(within(state).getByText(/belongs to another account/)).toBeTruthy();
     fireEvent.click(within(state).getByRole("link", { name: "Back to sessions" }));
     expect(await screen.findByText("Dashboard route")).toBeTruthy();
@@ -425,7 +430,7 @@ describe("SessionPage back link (G23)", () => {
   it("not found: Back to sessions steps back to the list like the back link, instead of pushing it again", async () => {
     renderFromDashboard(UNKNOWN_ID, "?state=failed");
     const title = await screen.findByRole("heading", { name: "Session not found" }, { timeout: 5000 });
-    fireEvent.click(within(title.closest("[role=status]") as HTMLElement).getByRole("link", { name: "Back to sessions" }));
+    fireEvent.click(within(title.closest("[role=group]") as HTMLElement).getByRole("link", { name: "Back to sessions" }));
     expect(await screen.findByText("Dashboard route")).toBeTruthy();
     expect(screen.getByTestId("search").textContent).toBe("?state=failed");
     expect(screen.getByTestId("nav").textContent).toBe("POP");
@@ -450,3 +455,65 @@ describe("SessionPage back link (G23)", () => {
 function NavigationProbe() {
   return <output data-testid="nav">{useNavigationType()}</output>;
 }
+
+describe("SessionPage status history length (mobile review M2)", () => {
+  /** `n` recorded changes for `session`, newest first like the API returns them. */
+  const history = (session: SessionRow, n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: n - i,
+      owner_id: session.owner_id,
+      host_id: session.host_id,
+      session_id: session.id,
+      type: "status_changed" as const,
+      status: i % 2 ? ("running" as const) : ("waiting_for_input" as const),
+      summary: `Change ${n - i}`,
+      dedupe_key: `test-${n - i}`,
+      is_demo: true,
+      occurred_at: new Date(Date.now() - i * 60_000).toISOString(),
+    }));
+  const items = () => within(section("Status history")).getAllByRole("listitem").map((li) => li.querySelector("p")?.textContent);
+
+  it("folds a long history to the newest events behind a disclosure, and unfolds it", async () => {
+    const { live } = await demoSessions();
+    const real = demo();
+    backend.api = { ...real, listEvents: () => Promise.resolve(history(live, 20)) };
+    renderSession(live.id);
+    await heading(live.title ?? live.external_id);
+    const toggle = await screen.findByRole("button", { name: "Show 12 older events" }, { timeout: 5000 });
+    expect(items()).toEqual(Array.from({ length: 8 }, (_, i) => `Change ${20 - i}`));
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    // It names the list it controls, which stays the same element when it grows.
+    const list = document.getElementById(toggle.getAttribute("aria-controls") ?? "");
+    expect(list?.tagName).toBe("OL");
+    expect(within(section("Status history")).getByText("20 events")).toBeTruthy();
+
+    fireEvent.click(toggle);
+    expect(items()).toHaveLength(20);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.textContent).toBe("Show fewer");
+    fireEvent.click(toggle);
+    expect(items()).toHaveLength(8);
+  });
+
+  it("never calls a full page the whole history", async () => {
+    const { live } = await demoSessions();
+    const real = demo();
+    backend.api = { ...real, listEvents: (_id: string, limit?: number) => Promise.resolve(history(live, limit ?? 0)) };
+    renderSession(live.id);
+    await heading(live.title ?? live.external_id);
+    // The page asks for STATUS_HISTORY_LIMIT; a full page may be a cut history.
+    expect(await within(section("Status history")).findByText("Latest 100 events", {}, { timeout: 5000 })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show 92 older events" })).toBeTruthy();
+  });
+
+  it("shows a short history whole, with no control", async () => {
+    const { live } = await demoSessions();
+    const real = demo();
+    backend.api = { ...real, listEvents: () => Promise.resolve(history(live, 10)) };
+    renderSession(live.id);
+    await heading(live.title ?? live.external_id);
+    expect(await within(section("Status history")).findByText("10 events", {}, { timeout: 5000 })).toBeTruthy();
+    expect(items()).toHaveLength(10);
+    expect(screen.queryByRole("button", { name: /older event|Show fewer/ })).toBeNull();
+  });
+});

@@ -10,17 +10,27 @@ import { UserIdContext } from "../hooks.js";
 import { HostPage } from "./HostPage.js";
 import { HostsPage } from "./HostsPage.js";
 
-const demo = vi.hoisted(() => ({ sourceOutage: false }));
+const demo = vi.hoisted(() => ({ sourceOutage: false, errorKind: null as string | null }));
 
 vi.mock("../platform.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../platform.js")>();
   const { createDemoApi } = await import("@mc/api-client/demo");
+  type HostRow = import("@mc/contracts").HostRow;
   return {
     ...actual,
     loadBackendChoice: () => ({ kind: "demo" }),
     // With an outage from t=0 the laptop heartbeats but never reports a session.
-    createApi: () =>
-      Promise.resolve(createDemoApi(demo.sourceOutage ? { tickMs: 0, sourceOutageAtMs: 0, sourceOutageMs: 60_000 } : { tickMs: 0, sourceOutageMs: 0 })),
+    createApi: () => {
+      const api = createDemoApi(demo.sourceOutage ? { tickMs: 0, sourceOutageAtMs: 0, sourceOutageMs: 60_000 } : { tickMs: 0, sourceOutageMs: 0 });
+      const kind = demo.errorKind as HostRow["provider_error_kind"];
+      if (!kind) return Promise.resolve(api);
+      // The demo only simulates a timeout: report another category for the failing host.
+      return Promise.resolve({
+        ...api,
+        listHosts: async (options: Parameters<typeof api.listHosts>[0]) =>
+          (await api.listHosts(options)).map((h) => (h.provider_error_since ? { ...h, provider_error_kind: kind } : h)),
+      });
+    },
   };
 });
 
@@ -32,6 +42,7 @@ let queryClient: QueryClient;
 afterEach(() => {
   queryClient.clear();
   demo.sourceOutage = false;
+  demo.errorKind = null;
 });
 
 function ApiReady({ children }: { children: ReactNode }) {
@@ -96,8 +107,35 @@ describe("HostPage", () => {
   it("says when the host can't read its sessions", async () => {
     demo.sourceOutage = true;
     renderAt(`/hosts/${LAPTOP}`);
-    expect(await screen.findByText(/Can't read its sessions since just now\./, {}, { timeout: 5000 })).toBeTruthy();
+    const warning = await screen.findByText(/Its sessions haven't updated since just now, so/, {}, { timeout: 5000 });
+    // Schema v4: the effect leads, then the category's cause and what to do (the demo simulates a timeout).
+    expect(within(warning).getByText("The host can't read its sessions.").tagName).toBe("STRONG");
+    expect(warning.textContent).toMatch(/^The host can't read its sessions\. Reading sessions timed out\. Its sessions haven't updated since just now, so their status may be out of date/);
+    expect(warning.textContent).toContain("the connector keeps retrying");
+    // Plain text: no markdown backticks shown literally.
+    expect(warning.textContent).not.toContain("`");
     expect(await screen.findByRole("heading", { name: "No sessions from this host" })).toBeTruthy();
+  });
+
+  it("says refused updates aren't being saved, not that the host can't read its sessions", async () => {
+    demo.sourceOutage = true;
+    demo.errorKind = "writes_not_applied";
+    renderAt(`/hosts/${LAPTOP}`);
+    const warning = await screen.findByText(/Its sessions haven't updated since just now, so/, {}, { timeout: 5000 });
+    expect(within(warning).getByText("The host's session updates aren't being saved.").tagName).toBe("STRONG");
+    expect(warning.textContent).toContain("The backend keeps refusing or skipping its updates.");
+    expect(warning.textContent).toContain("clock");
+    expect(warning.textContent).not.toMatch(/can't read/i);
+  });
+
+  it("names a failing source's effect and cause on the host list too, linking to the host's page", async () => {
+    demo.sourceOutage = true;
+    renderAt("/hosts");
+    const note = (await screen.findByText(/Its sessions haven't updated since/, {}, { timeout: 5000 })).closest(".host-warning") as HTMLElement;
+    expect(note.textContent).toMatch(/^The host can't read its sessions\. Reading sessions timed out\. Its sessions haven't updated since just now, so their status may be out of date\. /);
+    // Said once, not repeated in other words.
+    expect(note.textContent?.match(/can't read/gi)).toHaveLength(1);
+    expect(within(note).getByRole("link", { name: "What to do about Demo laptop" }).getAttribute("href")).toBe(`/hosts/${LAPTOP}`);
   });
 
   it("shows a not-found state for unknown and malformed ids", async () => {
@@ -140,7 +178,7 @@ describe("HostPage freshness", () => {
   it("marks data stale while the session source fails", async () => {
     demo.sourceOutage = true;
     renderAt(`/hosts/${LAPTOP}`);
-    await screen.findByText(/Can't read its sessions since/, {}, { timeout: 5000 });
+    await screen.findByText(/Its sessions haven't updated since/, {}, { timeout: 5000 });
     expect(healthFresh().textContent).toBe("Updated just now, Stale: Source not responding");
   });
 });

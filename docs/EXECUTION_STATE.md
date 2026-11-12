@@ -2,16 +2,30 @@
 
 Continuity between sessions. Update it at the end of every cycle. Requirements are in `PRODUCT_SPEC.md`, statuses in `GAP_ANALYSIS.md`, and the plan in `ROADMAP.md` (D-016).
 
-**Last updated:** 2026-11-03, end of the sixth cycle.
+**Last updated:** 2026-11-12, end of the seventh cycle.
 
 ## Where things stand
 
 - **Branch:** `main`. The local commits are ahead of `origin/main` (public). They are **not pushed**, because a push needs founder authorization (D-017).
-- **Schema:** v3. Clients require exactly v3. The latest migration, `20261104000001_fix_set_owner_from_host.sql`, changes a function body only and leaves the version at 3.
+- **Schema:** v4. Clients and connectors require exactly v4. The migration is `20261112000001_provider_error_kind.sql` (D-026). Apply it **before** upgrading any connector (see `DEPLOYMENT.md`).
+- **Subagent models (user decision, 2026-11-12):** subagents default to Sonnet through the user-level `CLAUDE_CODE_SUBAGENT_MODEL`. Only `security`, `architect-dev` and `qa` are pinned to Opus.
 - **Gates at the last commit:**
-  - `npm run check:release` passes: typecheck, lint, 930 tests (SQL-level ones in PGlite included), build, and 231.5 kB gzip against a 270 kB budget.
+  - `npm run check:release` passes: typecheck, lint, 1349 tests (79 SQL-level in PGlite), build, and 242.7 kB gzip against a 270 kB budget.
   - **When the laptop is busy** with the user's other projects (Angular dev servers and test runs), leave those processes alone. The per-test ceilings in `vitest.config.ts` absorb the load.
   - `test:db` and `test:e2e` have never run. The PGlite layer is **not** `test:db` (D-021).
+
+## Seventh cycle (2026-11-12): what was done
+
+- **Team:**
+  - Five engineers worked in parallel with separate file ownership: G27 diagnostics and schema v4, G29 setup, G30/G33 (designer), G32 auth, and G24 transitions.
+  - QA, security and designer then reviewed the integrated tree.
+  - Three engineers fixed the findings: alerts and failure text; auth pinning and the connector; design.
+  - The main session handled integration, the label fix and the docs.
+- **Delivered:** see ROADMAP "Done 2026-11-12 (seventh cycle)". Decisions D-026 and D-027.
+- **Left:**
+  - the G30 tap and hover leftovers;
+  - `asUser` is not enforced by type;
+  - the manual browser and device pass.
 
 ## Sixth cycle (2026-11-03): what was done
 
