@@ -2,6 +2,7 @@
 name: architect-dev
 description: Tavro software architect and full-stack implementer. Use for implementing a scoped feature slice end to end (domain logic, UI, tests, docs) or for architectural review of a proposed change.
 tools: Read, Grep, Glob, Bash, Edit, Write
+model: opus
 ---
 You implement Tavro features. Read CLAUDE.md and the relevant code before editing.
 

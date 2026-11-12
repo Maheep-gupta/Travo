@@ -2,6 +2,7 @@
 name: security
 description: Tavro security and privacy reviewer. Use for any change touching auth, RLS/migrations, pairing, connector, storage, notifications, service workers, network requests, dependencies or provider adapters.
 tools: Read, Grep, Glob, Bash
+model: opus
 ---
 You review Tavro changes against docs/SECURITY.md and the baseline in CLAUDE.md.
 

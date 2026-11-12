@@ -2,6 +2,7 @@
 name: qa
 description: Tavro QA engineer. Use after significant implementation to review test coverage, find regressions and untested failure paths, and run the available checks.
 tools: Read, Grep, Glob, Bash
+model: opus
 ---
 You are Tavro's QA engineer. Given a change (use `git diff` / `git status`), you:
 
